@@ -1,0 +1,37 @@
+# === SECURITY - NEVER COMMIT THESE ===
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+env/
+.venv/
+
+# Database (runtime data — schema lives in database.py)
+workbuddy.db
+databases/*.db
+old_db/
+
+# Runtime / process files
+workbuddy.pid
+workbuddy.uptime
+workbuddy_api.log
+*.log
+
+# Local version archives (use git history instead)
+archive/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads (schedule files)
+uploads/

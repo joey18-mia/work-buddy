@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorkBuddy Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #0a0c0f;
+    --surface: #0f1318;
+    --border:  #1a2030;
+    --green:   #22c55e;
+    --teal:    #00a3e0;
+    --yellow:  #f59e0b;
+    --red:     #ef4444;
+    --orange:  #ff6b35;
+    --purple:  #a78bfa;
+    --dim:     #3a4a5a;
+    --text:    #c8d8e8;
+    --mono:    'JetBrains Mono', monospace;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    overflow: hidden;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .logo {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--teal);
+    letter-spacing: .02em;
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--dim);
+    transition: background .3s;
+    flex-shrink: 0;
+  }
+  .status-dot.connected   { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.reconnecting{ background: var(--yellow); animation: blink .8s infinite; }
+
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  .status-label {
+    font-size: 11px;
+    color: var(--dim);
+  }
+  .status-label.connected    { color: var(--green); }
+  .status-label.reconnecting { color: var(--yellow); }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 12px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--dim);
+    cursor: pointer;
+    transition: all .15s;
+    letter-spacing: .03em;
+  }
+  .btn:hover { border-color: var(--teal); color: var(--teal); }
+  .btn.danger:hover { border-color: var(--red); color: var(--red); }
+
+  .counter {
+    font-size: 11px;
+    color: var(--dim);
+    min-width: 60px;
+    text-align: right;
+  }
+
+  /* ── Filter bar ── */
+  .filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+
+  .filter-label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+
+  .filter-btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 99px;
+    border: 1px solid var(--border);
+    background: transparent;
+    cursor: pointer;
+    transition: all .15s;
+    letter-spacing: .03em;
+  }
+
+  .filter-btn[data-type="ALL"]      { color: var(--text); }
+  .filter-btn[data-type="SERVER"]   { color: var(--teal); }
+  .filter-btn[data-type="WEATHER"]  { color: var(--purple); }
+  .filter-btn[data-type="TRAFFIC"]  { color: var(--yellow); }
+  .filter-btn[data-type="ROUTE"]    { color: var(--green); }
+  .filter-btn[data-type="SCHEDULE"] { color: var(--orange); }
+  .filter-btn[data-type="EVENT"]    { color: #60a5fa; }
+  .filter-btn[data-type="MIGRATE"]  { color: var(--dim); }
+  .filter-btn[data-type="ERROR"]    { color: var(--red); }
+  .filter-btn[data-type="LIST"]     { color: var(--teal); }
+
+  .filter-btn.active { background: currentColor; color: var(--bg) !important; }
+  .filter-btn:not(.active):hover { opacity: .8; border-color: currentColor; }
+
+  /* ── Console output ── */
+  .console-wrap {
+    height: calc(100vh - 94px);
+    overflow-y: auto;
+    padding: 12px 0;
+  }
+
+  .console-wrap::-webkit-scrollbar { width: 6px; }
+  .console-wrap::-webkit-scrollbar-track { background: transparent; }
+  .console-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+  .log-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+    padding: 2px 20px;
+    line-height: 1.6;
+    transition: background .1s;
+  }
+
+  .log-line:hover { background: rgba(255,255,255,.025); }
+  .log-line.hidden { display: none; }
+
+  .log-ts {
+    color: var(--dim);
+    flex-shrink: 0;
+    margin-right: 14px;
+    user-select: none;
+  }
+
+  .log-type {
+    flex-shrink: 0;
+    min-width: 72px;
+    margin-right: 10px;
+    font-weight: 500;
+  }
+
+  .log-msg { color: var(--text); word-break: break-all; flex: 1; }
+
+  /* Type colors */
+  .type-server   { color: var(--teal); }
+  .type-weather  { color: var(--purple); }
+  .type-traffic  { color: var(--yellow); }
+  .type-route    { color: var(--green); }
+  .type-schedule { color: var(--orange); }
+  .type-event    { color: #60a5fa; }
+  .type-migrate  { color: var(--dim); }
+  .type-database { color: var(--dim); }
+  .type-error    { color: var(--red); }
+  .type-list     { color: var(--teal); }
+  .type-other    { color: var(--text); }
+
+  /* New line flash */
+  @keyframes newline {
+    from { background: rgba(0,163,224,.12); }
+    to   { background: transparent; }
+  }
+  .log-line.new { animation: newline .8s ease-out forwards; }
+
+  /* Empty state */
+  .empty-state {
+    padding: 40px 20px;
+    color: var(--dim);
+    text-align: center;
+    font-size: 12px;
+    line-height: 2;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <span class="logo">⚾ WorkBuddy Console</span>
+    <span class="status-dot" id="status-dot"></span>
+    <span class="status-label" id="status-label">Connecting…</span>
+  </div>
+  <div class="header-right">
+    <span class="counter" id="line-counter">0 lines</span>
+    <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);cursor:pointer">
+      <input type="checkbox" id="autoscroll" checked style="accent-color:var(--teal)">
+      Auto-scroll
+    </label>
+    <button class="btn" onclick="clearConsole()">Clear</button>
+    <a href="/" class="btn" style="text-decoration:none">← Dashboard</a>
+  </div>
+</div>
+
+<div class="filter-bar">
+  <span class="filter-label">Filter:</span>
+  <button class="filter-btn active" data-type="ALL"      onclick="setFilter('ALL')">All</button>
+  <button class="filter-btn"        data-type="SERVER"   onclick="setFilter('SERVER')">Server</button>
+  <button class="filter-btn"        data-type="WEATHER"  onclick="setFilter('WEATHER')">Weather</button>
+  <button class="filter-btn"        data-type="TRAFFIC"  onclick="setFilter('TRAFFIC')">Traffic</button>
+  <button class="filter-btn"        data-type="ROUTE"    onclick="setFilter('ROUTE')">Routes</button>
+  <button class="filter-btn"        data-type="SCHEDULE" onclick="setFilter('SCHEDULE')">Schedule</button>
+  <button class="filter-btn"        data-type="EVENT"    onclick="setFilter('EVENT')">Events</button>
+  <button class="filter-btn"        data-type="MIGRATE"  onclick="setFilter('MIGRATE')">Migrate</button>
+  <button class="filter-btn"        data-type="ERROR"    onclick="setFilter('ERROR')">Errors</button>
+  <button class="filter-btn"        data-type="LIST"     onclick="setFilter('LIST')">List</button>
+</div>
+
+<div class="console-wrap" id="console-wrap">
+  <div class="empty-state" id="empty-state">Waiting for log data…</div>
+</div>
+
+<script>
+const wrap      = document.getElementById('console-wrap');
+const emptyEl   = document.getElementById('empty-state');
+const counterEl = document.getElementById('line-counter');
+const dotEl     = document.getElementById('status-dot');
+const labelEl   = document.getElementById('status-label');
+
+let lineCount    = 0;
+let activeFilter = 'ALL';
+let es           = null;
+let reconnectMs  = 2000;
+
+// ── Type detection ──────────────────────────
+function detectType(msg) {
+  const upper = msg.toUpperCase();
+  if (upper.includes('ERROR') || upper.includes('FAILED'))   return 'ERROR';
+  if (upper.includes('SERVER'))   return 'SERVER';
+  if (upper.includes('WEATHER'))  return 'WEATHER';
+  if (upper.includes('TRAFFIC'))  return 'TRAFFIC';
+  if (upper.includes('ROUTE'))    return 'ROUTE';
+  if (upper.includes('SCHEDULE')) return 'SCHEDULE';
+  if (upper.includes('EVENT'))    return 'EVENT';
+  if (upper.includes('MIGRATE') || upper.includes('DATABASE')) return 'MIGRATE';
+  if (upper.includes('LIST'))     return 'LIST';
+  return 'OTHER';
+}
+
+// ── Parse a raw log line ─────────────────────
+// Format: "2026-05-04 07:00:01  TRAFFIC  | TomTom x4 ..."
+function parseLine(raw) {
+  // Timestamp is first 19 chars
+  const ts  = raw.length >= 19 ? raw.slice(0, 19) : '';
+  const rest = raw.length > 21 ? raw.slice(21) : raw;
+  const type = detectType(rest);
+  return { ts, rest, type };
+}
+
+// ── Append a line to the console ─────────────
+function appendLine(raw, isNew = false) {
+  if (emptyEl) { emptyEl.remove(); }
+  const { ts, rest, type } = parseLine(raw);
+  const hidden = activeFilter !== 'ALL' && !type.startsWith(activeFilter);
+
+  const div = document.createElement('div');
+  div.className = `log-line type-${type.toLowerCase()}${hidden ? ' hidden' : ''}${isNew ? ' new' : ''}`;
+  div.dataset.type = type;
+
+  div.innerHTML = `<span class="log-ts">${ts}</span><span class="log-msg">${escHtml(rest)}</span>`;
+  wrap.appendChild(div);
+
+  lineCount++;
+  counterEl.textContent = `${lineCount} line${lineCount !== 1 ? 's' : ''}`;
+
+  if (isNew && document.getElementById('autoscroll').checked) {
+    div.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }
+}
+
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Filter ───────────────────────────────────
+function setFilter(type) {
+  activeFilter = type;
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.type === type);
+  });
+  document.querySelectorAll('.log-line').forEach(line => {
+    const lineType = line.dataset.type || 'OTHER';
+    const hide = type !== 'ALL' && !lineType.startsWith(type);
+    line.classList.toggle('hidden', hide);
+  });
+}
+
+// ── Clear ────────────────────────────────────
+function clearConsole() {
+  wrap.innerHTML = '';
+  lineCount = 0;
+  counterEl.textContent = '0 lines';
+}
+
+// ── SSE connection ───────────────────────────
+function connect() {
+  setStatus('reconnecting', 'Connecting…');
+
+  es = new EventSource('/api/console/stream');
+
+  es.onopen = () => {
+    setStatus('connected', 'Live');
+    reconnectMs = 2000;
+  };
+
+  es.onmessage = (e) => {
+    if (e.data.startsWith(':')) return;  // keepalive comment
+    appendLine(e.data, true);
+  };
+
+  es.onerror = () => {
+    setStatus('reconnecting', `Reconnecting in ${reconnectMs / 1000}s…`);
+    es.close();
+    setTimeout(connect, reconnectMs);
+    reconnectMs = Math.min(reconnectMs * 1.5, 15000);
+  };
+}
+
+function setStatus(cls, label) {
+  dotEl.className   = `status-dot ${cls}`;
+  labelEl.className = `status-label ${cls}`;
+  labelEl.textContent = label;
+}
+
+// Start
+connect();
+</script>
+</body>
+</html>

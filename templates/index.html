@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark-blue">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorkBuddy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<!-- ═══════════ TOP BAR ═══════════ -->
+<header class="topbar">
+  <div class="topbar-left">
+    <span class="logo">⚾ WorkBuddy</span>
+    <span class="location-tag">{{ location }}</span>
+    <span id="weather-inline" class="weather-inline">—</span>
+    <button class="topbar-icon-refresh" title="Refresh weather" onclick="loadWeather(true)">↺</button>
+  </div>
+  <div class="topbar-center">
+    <span id="clock" class="clock">--:-- --</span>
+    <span id="dateline" class="dateline"></span>
+  </div>
+  <div class="topbar-right">
+    <div id="marlins-pill" class="marlins-pill hidden">
+      <span class="marlins-dot"></span>
+      <span id="marlins-status">Marlins</span>
+    </div>
+    <button class="topbar-mlb-btn" onclick="openMLBFloat()">⚾ Schedule</button>
+    <button class="topbar-mlb-btn" onclick="openSchedConfig()">📅 Work Schedule</button>
+    <button class="icon-btn" onclick="openModal('settings-modal')">⚙</button>
+    <div class="theme-picker">
+      <button class="theme-dot" data-theme="dark"      title="Dark"    style="background:#111"></button>
+      <button class="theme-dot" data-theme="dark-blue" title="Blue"    style="background:#0d1b2e"></button>
+      <button class="theme-dot" data-theme="teal"      title="Marlins" style="background:#00AFA0"></button>
+      <button class="theme-dot" data-theme="vice"      title="Vice"    style="background:linear-gradient(135deg,#FF1E8E,#00EEFF)"></button>
+      <button class="theme-dot" data-theme="light"     title="Light"   style="background:#f0f4f8;border:1px solid #ccc"></button>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════ MAIN GRID ═══════════ -->
+<main class="dashboard">
+
+  <!-- Calendar -->
+  <section class="col-calendar">
+    <div class="card calendar-card">
+      <div class="card-header">
+        <h2>Calendar</h2>
+        <div class="cal-controls">
+          <button class="view-toggle active" id="btn-week" onclick="setCalView('week')">Week</button>
+          <button class="view-toggle" id="btn-day" onclick="setCalView('day')">Day</button>
+          <button class="cal-nav" onclick="calNav(-1)">‹</button>
+          <span id="cal-label" class="cal-label"></span>
+          <button class="cal-nav" onclick="calNav(1)">›</button>
+          <button class="cal-nav" onclick="calToday()">Today</button>
+        </div>
+      </div>
+      <div id="calendar-body"></div>
+    </div>
+  </section>
+
+  <!-- Routes -->
+  <aside class="col-routes">
+    <section class="card" id="routes-card">
+      <div class="card-header">
+        <h2>Routes</h2>
+        <div style="display:flex;align-items:center;gap:6px">
+          <button class="carousel-nav" id="routes-prev" onclick="routesPage(-1)">‹</button>
+          <span id="routes-page-indicator" class="routes-page-indicator"></span>
+          <button class="carousel-nav" id="routes-next" onclick="routesPage(1)">›</button>
+          <button class="icon-btn" onclick="openMapBuilder()">＋</button>
+        </div>
+      </div>
+      <div id="routes-body"><div class="skeleton-block"></div></div>
+    </section>
+  </aside>
+
+  <!-- Traffic -->
+  <aside class="col-traffic">
+    <section class="card" id="traffic-card">
+      <div class="card-header">
+        <h2>Highway Traffic</h2>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span id="traffic-last-updated" class="traffic-timestamp"></span>
+          <button class="refresh-btn" onclick="loadTraffic(true)">↺</button>
+        </div>
+      </div>
+      <div id="traffic-body"><div class="skeleton-block"></div></div>
+    </section>
+  </aside>
+
+</main>
+
+<!-- ═══════════ MLB FLOAT ═══════════ -->
+<div id="mlb-float" class="mlb-float hidden">
+  <div class="mlb-float-header" id="mlb-float-drag">
+    <span>⚾ MLB Schedule</span>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="float-nav" onclick="shiftMLBWeek(-7)">‹ Prev</button>
+      <button class="float-nav" onclick="shiftMLBWeek(7)">Next ›</button>
+      <button class="float-close" onclick="closeMLBFloat()">✕</button>
+    </div>
+  </div>
+  <div id="mlb-float-body" class="mlb-float-body"></div>
+</div>
+
+<!-- ═══════════ WORK SCHEDULE CONFIG ═══════════ -->
+<div class="sched-modal-overlay hidden" id="sched-config-overlay">
+  <div class="sched-modal">
+    <div class="sched-modal-header">
+      <h2>📅 Work Schedule Configuration</h2>
+      <button class="close-btn" onclick="closeSchedConfig()" style="font-size:18px">✕</button>
+    </div>
+    <div class="sched-modal-body">
+
+      <!-- Section 1: Regular Hours -->
+      <div class="sched-section">
+        <div class="sched-section-title">Regular Working Hours</div>
+        <div class="sched-section-desc">When enabled, your regular hours appear on every applicable weekday in the calendar automatically. No manual entry needed.</div>
+
+        <div class="big-toggle">
+          <div class="big-toggle-track" id="reg-hours-toggle" onclick="toggleSetting('regular_hours_enabled', this)"></div>
+          <div>
+            <div class="big-toggle-label" id="reg-hours-label">Off</div>
+            <div class="big-toggle-sub">Toggle to show regular hours on calendar</div>
+          </div>
+        </div>
+
+        <div class="hours-config" id="hours-config-panel">
+          <div class="hours-row">
+            <span class="hours-label">From</span>
+            <input type="time" id="reg-start" class="hours-input" onchange="saveHours()">
+            <span class="hours-label">To</span>
+            <input type="time" id="reg-end" class="hours-input" onchange="saveHours()">
+          </div>
+          <div>
+            <div class="sched-section-desc" style="margin-bottom:6px">Working days:</div>
+            <div class="days-row" id="days-row">
+              <button class="day-chip" data-dow="1" onclick="toggleDay(1,this)">Mon</button>
+              <button class="day-chip" data-dow="2" onclick="toggleDay(2,this)">Tue</button>
+              <button class="day-chip" data-dow="3" onclick="toggleDay(3,this)">Wed</button>
+              <button class="day-chip" data-dow="4" onclick="toggleDay(4,this)">Thu</button>
+              <button class="day-chip" data-dow="5" onclick="toggleDay(5,this)">Fri</button>
+              <button class="day-chip" data-dow="6" onclick="toggleDay(6,this)">Sat</button>
+              <button class="day-chip" data-dow="7" onclick="toggleDay(7,this)">Sun</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 2: Uploads Override -->
+      <div class="sched-section">
+        <div class="sched-section-title">Uploads Override</div>
+        <div class="sched-section-desc">When ON: any day where your name is found in the imported schedule will replace your regular 9–5 block with the actual game event and its start time. When OFF: both regular hours and game events show independently.</div>
+
+        <div class="big-toggle">
+          <div class="big-toggle-track" id="override-toggle" onclick="toggleSetting('uploads_override', this)"></div>
+          <div>
+            <div class="big-toggle-label" id="override-label">Off</div>
+            <div class="big-toggle-sub">Game days override regular hours</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 3: Time Format -->
+      <div class="sched-section">
+        <div class="sched-section-title">Time Format</div>
+        <div class="sched-section-desc">Choose how times appear everywhere on the dashboard.</div>
+        <div style="display:flex;gap:10px;margin-top:4px">
+          <button class="view-toggle" id="fmt-12h" onclick="setTimeFormat('12h')">12h AM/PM</button>
+          <button class="view-toggle" id="fmt-24h" onclick="setTimeFormat('24h')">24h</button>
+        </div>
+      </div>
+
+      <!-- Section 4: Import Schedule -->
+      <div class="sched-section sched-section-full">
+        <div class="sched-section-title">Import Work Schedule</div>
+        <div class="sched-section-desc">Upload your Event Day Coverage spreadsheet. Only future dates where your name appears in a coverage column (not exceptions) will be imported as Game Day events.</div>
+
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div class="sched-section-desc">Watching shifts for:</div>
+          <input type="text" id="watched-person-input" class="hours-input" style="width:150px" placeholder="e.g. Joseph">
+          <button class="btn-sm primary" onclick="saveWatchedPerson()">Save Name</button>
+        </div>
+
+        <div class="upload-config-zone" id="upload-zone">
+          <div class="upload-config-row">
+            <span style="font-size:22px">📂</span>
+            <span id="upload-filename" style="font-size:13px;color:var(--text-lo);flex:1">Drop <strong>.xlsx</strong> or <strong>.csv</strong> here, or browse</span>
+            <label class="btn-sm primary" style="cursor:pointer">
+              Browse
+              <input type="file" id="schedule-file" accept=".xlsx,.xls,.csv" onchange="handleUpload(event)" hidden>
+            </label>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn-sm" id="preview-btn" onclick="previewSchedule()" disabled>👁 Preview</button>
+          <button class="btn-sm primary" id="import-btn" onclick="importSchedule()" disabled>⬇ Import to Calendar</button>
+        </div>
+
+        <div id="schedule-status" class="sched-status"></div>
+        <div id="schedule-preview" class="schedule-preview-box hidden"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ MAP ROUTE BUILDER ═══════════ -->
+<div class="modal-overlay hidden" id="map-modal">
+  <div class="modal modal-map">
+    <div class="modal-header">
+      <div class="map-header-left">
+        <h3>Draw Route</h3>
+        <input type="text" id="map-route-name" class="map-name-input" placeholder="Route name, e.g. Home → Work via 836">
+      </div>
+      <button class="close-btn" onclick="closeMapBuilder()">✕</button>
+    </div>
+    <div class="map-search-bar">
+      <input type="text" id="map-search" placeholder="Search an address to center the map…" onkeydown="if(event.key==='Enter')mapSearch()">
+      <button class="btn-sm" onclick="mapSearch()">Go</button>
+      <span id="map-snap-notice" class="map-snap-notice"></span>
+    </div>
+    <div class="map-instructions">
+      <span class="map-inst-step active" id="inst-1">① Click map → <strong>Start</strong></span>
+      <span class="map-inst-sep">→</span>
+      <span class="map-inst-step" id="inst-2">② Click each <strong>turn</strong></span>
+      <span class="map-inst-sep">→</span>
+      <span class="map-inst-step" id="inst-3">③ Right-click → <strong>End</strong></span>
+      <span class="map-inst-sep">→</span>
+      <span class="map-inst-step" id="inst-4">④ <strong>Save</strong></span>
+    </div>
+    <div id="leaflet-map"></div>
+    <div class="map-bottom-bar">
+      <div class="map-controls-left">
+        <button class="btn-sm" onclick="mapUndo()">↩ Undo</button>
+        <button class="btn-sm danger" onclick="mapClear()">✕ Clear</button>
+        <span id="map-point-count" class="map-point-count">0 points</span>
+        <span id="map-end-hint" class="map-end-hint hidden">Right-click a point → End</span>
+      </div>
+      <button class="btn-primary map-save-btn" onclick="saveMapRoute()">Save Route</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ STANDARD MODALS ═══════════ -->
+
+<!-- Event Detail/Edit -->
+<div class="modal-overlay hidden" id="event-detail-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Edit Event</h3>
+      <button class="close-btn" onclick="closeModal('event-detail-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="detail-event-id">
+      <label>Title</label><input type="text" id="detail-title">
+      <div class="row-2">
+        <div><label>Type</label>
+          <select id="detail-type">
+            <option value="personal">Personal</option>
+            <option value="work">Work Shift</option>
+            <option value="game">Game Day</option>
+            <option value="other">Other</option>
+          </select>
+        </div><div></div>
+      </div>
+      <div class="multiday-row">
+        <label class="checkbox-label">
+          <input type="checkbox" id="detail-multiday" onchange="toggleMultiday('detail')">
+          Multi-day event
+        </label>
+      </div>
+      <div id="detail-dates-single"><label>Date</label><input type="date" id="detail-date"></div>
+      <div id="detail-dates-range" class="hidden row-2">
+        <div><label>Start Day</label><input type="date" id="detail-start-date"></div>
+        <div><label>End Day</label><input type="date" id="detail-end-date"></div>
+      </div>
+      <div class="row-2">
+        <div><label>Start Time</label><input type="time" id="detail-start"></div>
+        <div><label>End Time</label><input type="time" id="detail-end"></div>
+      </div>
+      <label>Notes</label><input type="text" id="detail-notes">
+      <button class="btn-primary" onclick="saveEventEdit()">Save Changes</button>
+      <button class="btn-delete-event" onclick="deleteEventFromDetail()">🗑 Delete Event</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Event -->
+<div class="modal-overlay hidden" id="event-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Add Event — <span id="event-modal-date"></span></h3>
+      <button class="close-btn" onclick="closeModal('event-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <label>Title</label><input type="text" id="event-title" placeholder="Meeting, dentist, game day...">
+      <label>Type</label>
+      <select id="event-type">
+        <option value="personal">Personal</option>
+        <option value="work">Work Shift</option>
+        <option value="game">Game Day</option>
+        <option value="other">Other</option>
+      </select>
+      <div class="multiday-row">
+        <label class="checkbox-label">
+          <input type="checkbox" id="add-multiday" onchange="toggleMultiday('add')">
+          Multi-day event
+        </label>
+      </div>
+      <div id="add-dates-single"><label>Date</label><input type="date" id="add-single-date"></div>
+      <div id="add-dates-range" class="hidden row-2">
+        <div><label>Start Day</label><input type="date" id="add-start-date"></div>
+        <div><label>End Day</label><input type="date" id="add-end-date"></div>
+      </div>
+      <div class="row-2">
+        <div><label>Start Time</label><input type="time" id="event-start"></div>
+        <div><label>End Time</label><input type="time" id="event-end"></div>
+      </div>
+      <label>Notes</label><input type="text" id="event-notes">
+      <button class="btn-primary" onclick="saveEvent()">Add Event</button>
+    </div>
+  </div>
+</div>
+
+<!-- Log Route -->
+<div class="modal-overlay hidden" id="log-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Log Route — <span id="log-route-name"></span></h3>
+      <button class="close-btn" onclick="closeModal('log-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="log-eta-display" class="eta-display"></div>
+      <label>Actual Travel Time (minutes)</label>
+      <input type="number" id="log-actual" placeholder="e.g. 35" min="1">
+      <label>Date</label><input type="date" id="log-date">
+      <label>Notes (optional)</label>
+      <input type="text" id="log-notes">
+      <!-- Checkpoint times — populated dynamically, all optional -->
+      <div id="log-checkpoints-section" class="cp-log-section"></div>
+      <button class="btn-primary" onclick="saveLog()">Log It</button>
+    </div>
+  </div>
+</div>
+
+<!-- Checkpoint Management -->
+<div class="modal-overlay hidden" id="checkpoints-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Checkpoints — <span id="cp-route-name"></span></h3>
+      <button class="close-btn" onclick="closeModal('checkpoints-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="field-hint">Add named stops along this route. When logging a trip you can optionally record how many minutes from departure you reached each checkpoint.</p>
+      <div id="cp-list" style="margin:8px 0"></div>
+      <label>Add Checkpoint</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="cp-new-name" placeholder="e.g. Highway Connection" onkeydown="if(event.key==='Enter')addCheckpoint()" style="flex:1">
+        <button class="btn-sm primary" onclick="addCheckpoint()">＋ Add</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Route History -->
+<div class="modal-overlay hidden" id="history-modal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Route History — <span id="history-route-name"></span></h3>
+      <button class="close-btn" onclick="closeModal('history-modal')">✕</button>
+    </div>
+    <div class="modal-body" id="history-body"></div>
+  </div>
+</div>
+
+<!-- Settings -->
+<div class="modal-overlay hidden" id="settings-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Settings</h3>
+      <button class="close-btn" onclick="closeModal('settings-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <label>Traffic Highways Displayed</label>
+      <p class="field-hint">Toggle which highways appear in the Traffic panel.</p>
+      <div id="highway-toggles" class="toggle-list"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
