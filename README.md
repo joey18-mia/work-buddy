@@ -1,6 +1,6 @@
-# ⚾ WorkBuddy
+# 🌴 WorkBuddy
 
-Your personal Miami ops dashboard — weather, traffic, routes, MLB, and calendar.
+A local ops dashboard — weather, traffic, routes, MLB schedule, and calendar.
 
 ---
 
@@ -22,8 +22,8 @@ notepad .env        # Windows
 
 Your `.env` file should look like:
 ```
-OPENWEATHER_API_KEY=abc123yourkeyhere
-TOMTOM_API_KEY=xyz789yourkeyhere
+OPENWEATHER_API_KEY=your_key_here
+TOMTOM_API_KEY=your_key_here
 SECRET_KEY=some-long-random-string-you-make-up
 ```
 
@@ -31,13 +31,17 @@ SECRET_KEY=some-long-random-string-you-make-up
 
 ### 3. Run the app
 ```bash
-python app.py
+python workbuddy_tray.py
 ```
+
+Or double-click `workbuddy.bat`.
 
 ### 4. Open your browser
 ```
 http://localhost:5000
 ```
+
+Console (live logs): `http://localhost:5000/console`
 
 ---
 
@@ -53,55 +57,29 @@ http://localhost:5000
 
 ## 📁 Project Structure
 
-```
-workbuddy/
-├── .env.example       ← Copy this to .env and fill in keys
-├── .env               ← YOUR KEYS (never share this)
-├── .gitignore         ← Keeps .env out of git
-├── app.py             ← Flask backend + all API routes
-├── database.py        ← SQLite setup
-├── requirements.txt
-├── workbuddy.db       ← Auto-created on first run
-├── templates/
-│   └── index.html
-└── static/
-    ├── css/style.css
-    └── js/app.js
-```
+See `WORKBUDDY_PROJECT.md` for full architecture, API routes, and database layout.
 
 ---
 
-## 🗄️ Database Tables
+## 📋 Features
 
-| Table | Purpose |
-|---|---|
-| `routes` | Your saved A→B routes |
-| `route_logs` | Historical trip times per route |
-| `events` | Calendar events + work shifts |
-
----
-
-## 📋 Features by Phase
-
-### ✅ Phase 1 (current)
-- Real-time Miami weather (OpenWeatherMap)
-- Live traffic for 6 Miami-Dade corridors (TomTom)
-- MLB schedule — Marlins game pinned to top
+- Weather (OpenWeatherMap)
+- Live traffic for configurable highway corridors (TomTom)
+- MLB schedule with highlighted team games
 - Routes CRUD + TomTom ETA + route logging + history
-- Calendar (week/day toggle) + manual events
-- Schedule import framework (Excel/CSV)
-
-### 🔜 Phase 2 (next)
-- Excel/CSV work schedule parser (needs sample file)
-- Chart.js visualizations for route history
-- Weather alerts panel
+- Calendar (week/day) + manual events
+- Spreadsheet schedule import (Excel/CSV)
+- Windows system tray launcher
 
 ---
 
 ## 🔧 Stopping / Restarting
 
+Use the system tray menu (**Stop Server** / **Restart Server**), or from a terminal:
+
 ```bash
-# Stop:  Ctrl+C in terminal
-# Restart:
-python app.py
+workbuddy.bat stop
+workbuddy.bat list    # connected devices (server must be running)
 ```
+
+For details, see **Running the Project** in `WORKBUDDY_PROJECT.md`.

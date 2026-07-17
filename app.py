@@ -18,9 +18,9 @@ app.secret_key = os.getenv("SECRET_KEY", "dev-fallback-change-me")
 
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 TOMTOM_KEY      = os.getenv("TOMTOM_API_KEY", "")
-LAT             = os.getenv("LOCATION_LAT",  "25.7617")
-LON             = os.getenv("LOCATION_LON",  "-80.1918")
-LOCATION_NAME   = os.getenv("LOCATION_NAME", "Miami, FL")
+LAT             = os.getenv("LOCATION_LAT",  "")
+LON             = os.getenv("LOCATION_LON",  "")
+LOCATION_NAME   = os.getenv("LOCATION_NAME", "")
 BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
 
 TRAFFIC_CACHE = {"data": None, "ts": 0}
@@ -78,7 +78,18 @@ def track_connection():
 
 @app.route("/")
 def index():
-    return render_template("index.html", location=LOCATION_NAME)
+    def _opt_float(key):
+        v = os.getenv(key, "").strip()
+        try:
+            return float(v) if v else None
+        except ValueError:
+            return None
+    return render_template(
+        "index.html",
+        location=LOCATION_NAME or "Local",
+        map_lat=_opt_float("LOCATION_LAT"),
+        map_lng=_opt_float("LOCATION_LON"),
+    )
 
 @app.route("/console")
 def console():
@@ -199,11 +210,30 @@ def traffic():
 #  MLB
 # ─────────────────────────────────────────────────────────────
 
+def _mlb_tracked_team_ids():
+    raw = os.getenv("MLB_TRACKED_TEAM_ID", "").strip()
+    if not raw:
+        return set()
+    ids = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            ids.add(int(part))
+    return ids
+
+def _game_is_featured(g):
+    ids = _mlb_tracked_team_ids()
+    if not ids:
+        return False
+    a = g["teams"]["away"]["team"]["id"]
+    h = g["teams"]["home"]["team"]["id"]
+    return a in ids or h in ids
+
 def _parse_game(g):
     a=g["teams"]["away"]; h=g["teams"]["home"]
     return {"game_pk":g["gamePk"],"time":g.get("gameDate",""),
             "away_team":a["team"]["name"],"home_team":h["team"]["name"],
-            "is_marlins":(a["team"]["id"]==146 or h["team"]["id"]==146),
+            "is_featured":_game_is_featured(g),
             "venue":g.get("venue",{}).get("name","")}
 
 @app.route("/api/mlb/today")
@@ -212,9 +242,9 @@ def mlb_today():
         r = requests.get(f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={date.today().isoformat()}", timeout=8)
         r.raise_for_status()
         dates = r.json().get("dates",[])
-        if not dates: return jsonify({"marlins":None})
-        marlins = next((g for g in [_parse_game(g) for g in dates[0].get("games",[])] if g["is_marlins"]),None)
-        return jsonify({"marlins":marlins})
+        if not dates: return jsonify({"featured_game":None})
+        featured = next((g for g in [_parse_game(g) for g in dates[0].get("games",[])] if g["is_featured"]),None)
+        return jsonify({"featured_game":featured})
     except Exception as e: return jsonify({"error":str(e)}),502
 
 @app.route("/api/mlb/week")
@@ -231,7 +261,7 @@ def mlb_week():
         week = []
         for day in r.json().get("dates",[]):
             games = [_parse_game(g) for g in day.get("games",[])]
-            games.sort(key=lambda g:(not g["is_marlins"],g["time"]))
+            games.sort(key=lambda g:(not g["is_featured"],g["time"]))
             week.append({"date":day["date"],"games":games})
         return jsonify(week)
     except Exception as e: return jsonify({"error":str(e)}),502
@@ -618,8 +648,8 @@ def parse_schedule():
         db_s    = get_settings_db()
         s_row   = db_s.execute("SELECT value FROM settings WHERE key='watched_person'").fetchone()
         db_s.close()
-        watched = (s_row["value"] if s_row else "Joseph").strip()
-    except Exception: watched = "Joseph"
+        watched = (s_row["value"] if s_row else "").strip()
+    except Exception: watched = ""
 
     try:
         df = pd.read_excel(filepath, sheet_name="2026 Home Events", header=0)

@@ -69,8 +69,8 @@ html,body{height:100%;background:var(--bg);color:var(--text-hi);font-family:'DM 
 .weather-inline{font-family:'DM Mono',monospace;font-size:11px;color:var(--text-md);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .clock{font-family:'DM Mono',monospace;font-size:19px;font-weight:500;color:var(--text-hi);letter-spacing:.04em;line-height:1.2;}
 .dateline{font-family:'DM Mono',monospace;font-size:9px;color:var(--text-md);letter-spacing:.03em;}
-.marlins-pill{display:flex;align-items:center;gap:5px;background:var(--accent-dim);border:1px solid var(--accent);border-radius:99px;padding:3px 10px;font-size:11px;font-family:'DM Mono',monospace;color:var(--accent);white-space:nowrap;}
-.marlins-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse 1.6s infinite;}
+.vice-pill{display:flex;align-items:center;gap:5px;background:var(--accent-dim);border:1px solid var(--accent);border-radius:99px;padding:3px 10px;font-size:11px;font-family:'DM Mono',monospace;color:var(--accent);white-space:nowrap;}
+.vice-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse 1.6s infinite;}
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
 .topbar-mlb-btn{font-family:'DM Sans',Arial,sans-serif;font-size:11px;font-weight:600;padding:4px 10px;border-radius:99px;border:1px solid var(--accent);background:var(--accent-dim);color:var(--accent);cursor:pointer;white-space:nowrap;transition:all .15s;}
 .topbar-mlb-btn:hover{background:var(--accent);color:var(--bg);}
@@ -242,11 +242,11 @@ html,body{height:100%;background:var(--bg);color:var(--text-hi);font-family:'DM 
 .float-day-label{font-family:'DM Mono',monospace;font-size:10px;font-weight:500;color:var(--accent);text-transform:uppercase;letter-spacing:.08em;padding:4px 0 6px;border-bottom:1px solid var(--border);margin-bottom:6px;}
 .float-game-row{display:flex;align-items:center;gap:10px;padding:5px 4px;border-radius:6px;transition:background .12s;}
 .float-game-row:hover{background:var(--bg-hover);}
-.float-game-row.marlins-row{background:var(--accent-dim);}
+.float-game-row.vice-row{background:var(--accent-dim);}
 .float-game-time{font-family:'DM Mono',monospace;font-size:11px;color:var(--accent);min-width:50px;}
 .float-game-teams{font-size:12px;font-weight:500;color:var(--text-hi);flex:1;}
 .float-game-teams .vs{color:var(--text-lo);margin:0 3px;}
-.marlins-tag{font-family:'DM Mono',monospace;font-size:9px;padding:2px 6px;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent);border-radius:99px;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;}
+.vice-tag{font-family:'DM Mono',monospace;font-size:9px;padding:2px 6px;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent);border-radius:99px;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;}
 .float-nav,.float-close{font-family:'DM Sans',Arial,sans-serif;font-size:11px;padding:3px 8px;border-radius:5px;border:1px solid var(--border-hi);background:transparent;color:var(--text-md);cursor:pointer;transition:all .15s;}
 .float-nav:hover{background:var(--accent);color:var(--bg);border-color:var(--accent);}
 .float-close:hover{color:var(--danger);border-color:var(--danger);}

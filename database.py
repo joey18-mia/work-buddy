@@ -194,7 +194,7 @@ def _settings_v0_to_v1(conn):
             value TEXT NOT NULL
         )""")
     defaults = {
-        "watched_person":        "Joseph",
+        "watched_person":        "",
         "regular_hours_enabled": "false",
         "regular_hours_start":   "09:00",
         "regular_hours_end":     "17:00",

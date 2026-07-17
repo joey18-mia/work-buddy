@@ -10,12 +10,12 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body>
+<body data-map-lat="{{ map_lat if map_lat is not none else '' }}" data-map-lng="{{ map_lng if map_lng is not none else '' }}">
 
 <!-- ═══════════ TOP BAR ═══════════ -->
 <header class="topbar">
   <div class="topbar-left">
-    <span class="logo">⚾ WorkBuddy</span>
+    <span class="logo">🌴 WorkBuddy</span>
     <span class="location-tag">{{ location }}</span>
     <span id="weather-inline" class="weather-inline">—</span>
     <button class="topbar-icon-refresh" title="Refresh weather" onclick="loadWeather(true)">↺</button>
@@ -25,17 +25,17 @@
     <span id="dateline" class="dateline"></span>
   </div>
   <div class="topbar-right">
-    <div id="marlins-pill" class="marlins-pill hidden">
-      <span class="marlins-dot"></span>
-      <span id="marlins-status">Marlins</span>
+    <div id="vice-pill" class="vice-pill hidden">
+      <span class="vice-dot"></span>
+      <span id="vice-game-status">Tonight</span>
     </div>
-    <button class="topbar-mlb-btn" onclick="openMLBFloat()">⚾ Schedule</button>
+    <button class="topbar-mlb-btn" onclick="openMLBFloat()">🌴 MLB</button>
     <button class="topbar-mlb-btn" onclick="openSchedConfig()">📅 Work Schedule</button>
     <button class="icon-btn" onclick="openModal('settings-modal')">⚙</button>
     <div class="theme-picker">
       <button class="theme-dot" data-theme="dark"      title="Dark"    style="background:#111"></button>
       <button class="theme-dot" data-theme="dark-blue" title="Blue"    style="background:#0d1b2e"></button>
-      <button class="theme-dot" data-theme="teal"      title="Marlins" style="background:#00AFA0"></button>
+      <button class="theme-dot" data-theme="teal"      title="Teal"    style="background:#00AFA0"></button>
       <button class="theme-dot" data-theme="vice"      title="Vice"    style="background:linear-gradient(135deg,#FF1E8E,#00EEFF)"></button>
       <button class="theme-dot" data-theme="light"     title="Light"   style="background:#f0f4f8;border:1px solid #ccc"></button>
     </div>
@@ -98,7 +98,7 @@
 <!-- ═══════════ MLB FLOAT ═══════════ -->
 <div id="mlb-float" class="mlb-float hidden">
   <div class="mlb-float-header" id="mlb-float-drag">
-    <span>⚾ MLB Schedule</span>
+    <span>🌴 Ballpark Week</span>
     <div style="display:flex;gap:6px;align-items:center">
       <button class="float-nav" onclick="shiftMLBWeek(-7)">‹ Prev</button>
       <button class="float-nav" onclick="shiftMLBWeek(7)">Next ›</button>
@@ -183,7 +183,7 @@
 
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <div class="sched-section-desc">Watching shifts for:</div>
-          <input type="text" id="watched-person-input" class="hours-input" style="width:150px" placeholder="e.g. Joseph">
+          <input type="text" id="watched-person-input" class="hours-input" style="width:150px" placeholder="Schedule name match">
           <button class="btn-sm primary" onclick="saveWatchedPerson()">Save Name</button>
         </div>
 

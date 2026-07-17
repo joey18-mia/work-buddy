@@ -8,7 +8,7 @@
 
 ## What This Is
 
-WorkBuddy is a personal Windows desktop dashboard built for a single user — currently deployed for an IT/DevOps employee at the Miami Marlins (loanDepot Park). It runs as a background Python server, accessible from any device on the local network, and is managed via a system tray icon. The goal is a single-app daily assistant covering commute, schedule, weather, traffic, MLB games, and calendar — all local, no subscriptions, minimal external dependencies.
+WorkBuddy is a personal Windows desktop dashboard for a single user. It runs as a background Python server, accessible from devices on the local network, and is managed via a system tray icon. The goal is a single-app daily assistant covering commute, schedule, weather, traffic, MLB games, and calendar — all local, no subscriptions, minimal external dependencies.
 
 ---
 
@@ -129,8 +129,8 @@ checkpoint_logs (id, route_log_id, checkpoint_id, minutes_from_start)
 ### MLB
 | Route | Description |
 |---|---|
-| `GET /api/mlb/today` | Today's Marlins game (for topbar pill) |
-| `GET /api/mlb/week?start=YYYY-MM-DD` | 7-day schedule for float panel |
+| `GET /api/mlb/today` | Today's featured team game (topbar pill), if `MLB_TRACKED_TEAM_ID` is set |
+| `GET /api/mlb/week?start=YYYY-MM-DD` | 7-day MLB schedule for float panel |
 
 ### Holidays
 | Route | Description |
@@ -169,10 +169,7 @@ checkpoint_logs (id, route_log_id, checkpoint_id, minutes_from_start)
 | Route | Description |
 |---|---|
 | `POST /api/schedule/upload` | Upload xlsx/csv file |
-| `POST /api/schedule/parse` | Parse uploaded file — `{"filename":"...", "preview": true/false}` |
-
-**Parse logic:**  
-Reads sheet "2026 Home Events". Columns 9-11 = COV1/2/3 (working). Columns 12-13 = EXCEPTION1/2 (NOT working — takes priority). Only imports future dates. Skips past events.
+| `POST /api/schedule/parse` | Parse uploaded spreadsheet — `{"filename":"...", "preview": true/false}` |
 
 ### Utilities
 | Route | Description |
@@ -217,14 +214,14 @@ Reads sheet "2026 Home Events". Columns 9-11 = COV1/2/3 (working). Columns 12-13
 ### Work Schedule Config (`📅 Work Schedule` button)
 Full-size config modal with 4 sections:
 1. **Regular Hours** — ON/OFF toggle, time pickers, day chip selectors (Mon–Fri default)
-2. **Uploads Override** — when ON, game days from Excel replace regular hours for that day
+2. **Uploads Override** — when ON, imported schedule events replace regular hours for matching days
 3. **Time Format** — `12h AM/PM` or `24h` toggle, applies everywhere
-4. **Import Schedule** — upload + preview + import with exception logic
+4. **Import Schedule** — upload, preview, and import
 
 ### MLB Schedule
-- Topbar pill shows Marlins game time
-- `⚾ Schedule` button opens draggable 7-day float panel
-- Marlins games pinned to top, highlighted
+- Topbar **vice** pill shows the next featured-team game (matchup + time)
+- `🌴 MLB` opens draggable 7-day **Ballpark Week** panel
+- Featured games (from `MLB_TRACKED_TEAM_ID`) pinned to top with a **VICE** tag
 
 ### System Tray (Windows)
 Right-click menu:
@@ -248,7 +245,7 @@ Custom icon: drop `tray_icon.png` (any size PNG) in the workbuddy folder. Falls 
 
 | Key | Default | Description |
 |---|---|---|
-| `watched_person` | `Joseph` | Name matched in schedule COV columns |
+| `watched_person` | *(empty)* | Label used when matching rows during schedule import |
 | `regular_hours_enabled` | `false` | Show virtual work hour chips on calendar |
 | `regular_hours_start` | `09:00` | Start time for regular hours |
 | `regular_hours_end` | `17:00` | End time for regular hours |
@@ -261,9 +258,9 @@ Custom icon: drop `tray_icon.png` (any size PNG) in the workbuddy folder. Falls 
 ## Themes (5)
 Toggled via dot picker in topbar. Persisted to localStorage.
 - **Dark** — near-black, light gray accent
-- **Dark Blue** — navy, Marlins teal accent (default)
-- **Teal** — classic Florida Marlins aqua on very dark background
-- **Vice** — Miami Vice: hot pink + electric cyan on near-black
+- **Dark Blue** — navy with teal accent (default)
+- **Teal** — aqua on very dark background
+- **Vice** — hot pink + electric cyan on near-black
 - **Light** — white/gray with blue accent
 
 Each theme defines its own CSS variables including `--holiday-bg`, `--holiday-text`, `--reg-hours`, `--reg-hours-dim`.
@@ -279,10 +276,11 @@ TOMTOM_API_KEY=...         # developer.tomtom.com — free tier (2,500 req/day)
                            #         Routing API, Geocoding API,
                            #         Traffic Incidents API
 SECRET_KEY=...             # any long random string
-LOCATION_LAT=25.7617
-LOCATION_LON=-80.1918
-LOCATION_NAME=Miami, FL
+LOCATION_LAT=...           # your area
+LOCATION_LON=...
+LOCATION_NAME=...
 PORT=5000                  # optional, defaults to 5000
+MLB_TRACKED_TEAM_ID=       # optional; comma-separated MLB team IDs to feature in UI
 ```
 
 ---
@@ -327,7 +325,7 @@ PORT=5000                  # optional, defaults to 5000
 - **Google Calendar sync** (optional bidirectional push — lower priority than ICS feed)
 - **"Leaving in X" countdown** — set a route + departure time, get a browser notification when it's time to leave based on current ETA
 - **Server management UI** — dedicated web interface (or Electron app) to start/stop/restart WorkBuddy instances rather than using the batch file
-- **Webhook/Teams bot integration** for IT ticketing alerts
+- **Webhook / chat bot integration** for external alerts
 - **Multi-user support** — currently single-user; `watched_person` setting is a step toward multi-user but DB structure would need user_id columns
 
 ---
@@ -361,7 +359,6 @@ On first launch, databases are created in `databases/`. If a legacy `workbuddy.d
 
 ## Known Behavior Notes
 - **Schedule import:** Only future dates are imported. Past events are skipped (skipped count shown in status).
-- **Exception columns:** If `watched_person` appears in `EXCEPTION1` or `EXCEPTION2`, that game row is excluded even if their name also appears in a coverage column. COV1/2/3 = working, EXCEPTION1/2 = not working.
 - **Calendar height:** Matches the tallest of the Routes or Traffic columns via CSS grid `align-items: stretch`. Minimum 420px.
 - **Regular hours:** Not stored in DB — rendered client-side from settings. Disabling the toggle immediately removes all chips with no data loss.
 - **Map-drawn routes:** Stored as JSON in `routes.waypoints` field. TomTom routing uses the lat/lng coordinates directly for ETA without re-geocoding.

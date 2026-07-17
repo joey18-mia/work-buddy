@@ -151,7 +151,7 @@ function applySettingsToUI() {
 
   // Watched person
   const wp = document.getElementById('watched-person-input');
-  if (wp) wp.value = s.watched_person || 'Joseph';
+  if (wp) wp.value = s.watched_person || '';
 }
 
 async function toggleSetting(key, trackEl) {
@@ -318,9 +318,11 @@ function toggleCorridor(id) {
 async function loadMLBToday() {
   try {
     const d = await fetchJSON('/api/mlb/today');
-    if (d.marlins) {
-      document.getElementById('marlins-pill').classList.remove('hidden');
-      document.getElementById('marlins-status').textContent = `Marlins @ ${fmtTime(new Date(d.marlins.time).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false}))}`;
+    if (d.featured_game) {
+      const g = d.featured_game;
+      const t = fmtTime(new Date(g.time).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false}));
+      document.getElementById('vice-pill').classList.remove('hidden');
+      document.getElementById('vice-game-status').textContent = `${g.away_team} @ ${g.home_team} · ${t}`;
     }
   } catch { /* silent */ }
 }
@@ -349,10 +351,10 @@ async function fetchMLBWeek() {
       if (!day.games?.length) return '';
       const label = new Date(day.date+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
       const rows  = day.games.map(g => `
-        <div class="float-game-row ${g.is_marlins?'marlins-row':''}">
+        <div class="float-game-row ${g.is_featured?'vice-row':''}">
           <div class="float-game-time">${formatGameTime(g.time)}</div>
           <div class="float-game-teams">${g.away_team}<span class="vs">@</span>${g.home_team}</div>
-          ${g.is_marlins?'<span class="marlins-tag">⚾</span>':''}
+          ${g.is_featured?'<span class="vice-tag">VICE</span>':''}
         </div>`).join('');
       return `<div class="float-day-group"><div class="float-day-label">${label}</div>${rows}</div>`;
     }).filter(Boolean).join('');
@@ -992,7 +994,12 @@ function openMapBuilder() {
 function closeMapBuilder() { closeModal('map-modal'); }
 function initLeafletMap() {
   state.mapInited=true;
-  state.map=L.map('leaflet-map',{zoomControl:true}).setView([25.7617,-80.1918],12);
+  const lat = parseFloat(document.body.dataset.mapLat);
+  const lng = parseFloat(document.body.dataset.mapLng);
+  const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
+  const center = hasCoords ? [lat, lng] : [39.8283, -98.5795];
+  const zoom = hasCoords ? 12 : 4;
+  state.map=L.map('leaflet-map',{zoomControl:true}).setView(center, zoom);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(state.map);
   state.map.on('click',onMapClick);
   state.map.on('contextmenu',e=>L.DomEvent.preventDefault(e));
