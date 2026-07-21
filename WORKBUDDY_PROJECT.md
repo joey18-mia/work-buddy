@@ -306,7 +306,267 @@ MLB_TRACKED_TEAM_ID=       # optional; comma-separated MLB team IDs to feature i
 
 ## Confirmed Future Plans
 
-### In-progress / Next build
+### Phase 2 — Mobile Client & Live Route Tracking **(priority / next build)**
+
+> **Goal:** A dedicated **mobile user experience** (not just a narrow desktop layout) that uses the same WorkBuddy server and settings. Multi-page layout is fine. Primary win: **one-tap route logging** with optional **GPS-backed checkpoint and arrival detection**.
+
+#### Scope overview
+
+| Area | Desktop (current) | Mobile client (Phase 2) |
+|---|---|---|
+| Configuration | Full dashboard + modals | Same settings keys & APIs; mobile-friendly multi-page UI |
+| Route logging | Manual “Log Route” after the fact | **Start Route** at departure; **End Route** at arrival |
+| Checkpoints | Name + order only; times entered manually | Checkpoints tied to **lat/lng + geofence radius** |
+| Location | N/A | Client reports position while a session is active |
+| Calendar / traffic / weather | 3-column grid | Bottom-nav pages; condensed views |
+
+Deliver as a **mobile web shell** first (`/m/` or responsive app shell) so it works on phone browsers against the existing LAN server — no app store required. Native wrapper (PWA install, optional Capacitor) can follow.
+
+---
+
+#### 2.1 Mobile client — UX & pages
+
+**Entry:** `http://<server>:5000/m/` (or auto-redirect when viewport &lt; 500px).
+
+**Suggested pages (bottom navigation):**
+
+1. **Home** — weather pill, traffic summary, today’s calendar slice, featured MLB pill  
+2. **Routes** — route list → route detail  
+3. **Calendar** — 3-day default on mobile; week toggle retained  
+4. **Settings** — same keys as desktop (`watched_person`, regular hours, corridors, time format, etc.)
+
+**Route detail (mobile-first):**
+
+```
+┌─────────────────────────────┐
+│  Route name                 │
+│  ETA · last avg             │
+│                             │
+│  [  START ROUTE  ]          │  ← logs departure time immediately
+│                             │
+│  Live elapsed:  00:23:14    │  (visible while session active)
+│                             │
+│  ○ Checkpoint A      —      │
+│  ● Checkpoint B   12:04     │  ← auto-filled when geofence hit
+│  ○ Destination       —      │
+│                             │
+│  [  END ROUTE  ]            │  ← manual arrival
+└─────────────────────────────┘
+```
+
+**Touch targets:** minimum 44px on all primary actions (Start / End / nav).
+
+**Parity rule:** anything configurable on desktop must be reachable on mobile via the same `/api/settings` and route CRUD endpoints — no separate mobile-only config store.
+
+---
+
+#### 2.2 Start Route / End Route — core logging flow
+
+**Start Route (manual, instant):**
+
+- User taps **Start Route** on a saved route.  
+- Server creates an **active route session** and records `started_at` (local time).  
+- No need to remember departure time — `actual_mins` is derived at end: `ended_at - started_at`.  
+- Replaces the current workflow of filling in total minutes after the fact (manual log remains as fallback for past trips).
+
+**End Route (manual, primary):**
+
+- User taps **End Route** when they arrive.  
+- Server sets `ended_at`, computes `actual_mins`, marks session `completed`.  
+- Stops location polling / heartbeat for that client.
+
+**End Route (automatic, backup):**
+
+- If the client is within the route **destination geofence** continuously for **`auto_end_minutes`** (default **5**, overridable per route), server auto-completes the session.  
+- On auto-end: status → `auto_completed`, location polling stops.  
+- Manual **End Route** always available and takes precedence if tapped first.
+
+**One active session (confirmed):**
+
+- Only **one** `active` session may exist at a time (globally, not per-route).  
+- If a session is already active, **Start Route** on any other route is **disabled** until the user **cancels** or **ends** the current one.  
+- Cancelled sessions are not saved to history (or saved with `status='cancelled'` and excluded from stats — TBD at implementation).
+
+---
+
+#### 2.3 Checkpoints tied to location
+
+**Schema additions (routes DB — migration v2, additive):**
+
+```sql
+-- checkpoints (add columns)
+lat         REAL,
+lng         REAL,
+radius_m    INTEGER DEFAULT 150   -- geofence radius in meters
+
+-- routes (add columns)
+dest_lat          REAL,
+dest_lng          REAL,
+dest_radius_m     INTEGER DEFAULT 150,
+auto_end_minutes  INTEGER DEFAULT 5   -- 0 = disable auto-end
+
+-- route_logs (add columns)
+started_at    TEXT,                  -- set on Start Route
+ended_at      TEXT,                  -- set on End / auto-end
+status        TEXT DEFAULT 'completed' -- active | completed | auto_completed | cancelled
+source        TEXT DEFAULT 'manual'    -- manual | live_session
+
+-- checkpoint_logs (add columns)
+passed_at     TEXT                    -- wall-clock when geofence triggered (optional; minutes_from_start still stored)
+```
+
+**Checkpoint editor (desktop + mobile):**
+
+- When adding/editing a checkpoint, pick a map point (same Leaflet stack) or “use current location” on phone.  
+- Default radius 150 m; advanced toggle per checkpoint.
+
+**Pass detection rules:**
+
+1. Only evaluate checkpoints **in route order** (by `position`).  
+2. A checkpoint is “passed” when client position is within `radius_m` — log **once** (first entry).  
+3. Store both `minutes_from_start` (from session `started_at`) and `passed_at` timestamp.  
+4. Skipped checkpoints stay empty (same philosophy as today).
+
+---
+
+#### 2.4 Location updates — architecture (discussion)
+
+**User intent:** periodic checks (~every minute) to see if the client has passed checkpoints or arrived.
+
+**Important constraint:** a server cannot read GPS from a phone on its own. The phone must **send** location to the server (browser Geolocation API). What we can do:
+
+| Approach | How it works | Pros | Cons |
+|---|---|---|---|
+| **A. Client push (recommended)** | While session `active`, mobile client POSTs location every 60 s (configurable) | Simple, works on LAN HTTP, battery-aware | Requires tab open or PWA background limits |
+| **B. Server heartbeat + client response** | Server sends SSE/WebSocket “tick”; client replies with location POST | Matches “server asks” mentally | More moving parts; still client-driven |
+| **C. Native app / Capacitor** | Background geolocation plugin | Best background accuracy | Extra packaging |
+
+**Recommended for Phase 2:** **A** — client push every **60 s** while GPS is healthy. As route history grows, checkpoint auto-detection becomes less critical over time; the **elapsed timer + Start/End** remain the primary value.
+
+**GPS loss behavior (confirmed):**
+
+- **Elapsed timer keeps running** — departure time is already captured; total trip time must not freeze in a tunnel.  
+- **Stop sending location** to the server while signal is lost (no bogus positions).  
+- **Retry every 30 s** until a fix is regained, then resume the normal 60 s interval.  
+- While GPS is lost: **no new checkpoint passes**, **auto-end dwell timer paused** (cannot confirm arrival without a fix). UI shows a subtle “GPS lost — retrying…” state.  
+- Manual **End Route** always works regardless of GPS.
+
+**Suggested APIs:**
+
+| Method | Route | Purpose |
+|---|---|---|
+| `POST` | `/api/routes/:id/sessions/start` | Start Route → returns `session_id` |
+| `POST` | `/api/sessions/:id/location` | `{ lat, lng, accuracy, recorded_at }` — client every ~60 s |
+| `GET` | `/api/sessions/:id` | Session status, elapsed, checkpoints hit (for mobile UI poll/SSE) |
+| `POST` | `/api/sessions/:id/end` | Manual End Route |
+| `POST` | `/api/sessions/:id/cancel` | Abort without saving (optional) |
+
+**Server-side loop (on each location POST):**
+
+1. Ignore if session not `active`.  
+2. For next unpassed checkpoint in order → if inside geofence, insert `checkpoint_logs`.  
+3. If inside destination geofence → start/continue dwell timer; if dwell ≥ `auto_end_minutes` → auto-end.  
+4. If outside destination → reset dwell timer.
+
+**Privacy / battery:** location is only collected while a session is `active`; never stored as a continuous track — only checkpoint pass events and session start/end.
+
+---
+
+#### 2.5 Implementation phases (suggested order)
+
+1. **Routes DB migration v2** — geofence columns + active session fields on `route_logs`.  
+2. **Session APIs** — start / location / end / status (no GPS yet; manual end only).  
+3. **Mobile shell** — `/m/` layout, bottom nav, Routes page with Start/End + live timer.  
+4. **Checkpoint map picker** — lat/lng on checkpoints + destination on routes.  
+5. **Geofence engine** — auto checkpoint + auto-end on location POST.  
+6. **Settings parity** — mobile settings pages for corridors, schedule, regular hours.  
+7. **PWA polish** — install prompt, keep-screen-awake hint during active session.
+
+---
+
+#### 2.6 Confirmed decisions
+
+| Topic | Decision |
+|---|---|
+| Active sessions | **One at a time.** Second route cannot start until current session is cancelled or ended. |
+| Location interval | **60 s** while GPS is healthy. |
+| Geofence default | **150 m** (per-checkpoint override still supported). |
+| GPS loss | Timer **keeps going**; pause location posts and geofence logic; **retry every 30 s** until fix returns, then resume 60 s cadence. Manual End Route always available. |
+| Destination coords | **Option C (locked).** Priority: stored `dest_lat/lng` → parse `lat,lng` text → map waypoints end point → geocode on first Start (first result, cache) → block Start if all fail. |
+| Trip `source` field | **Locked.** New `source` column on `route_logs` only (`manual` \| `live_session`). **All pre-existing rows migrated to `manual`.** Does not alter routes, checkpoints, or manual log POST behavior. |
+
+**Implementation handoff:** see `PHASE2_IMPLEMENTATION.md` for a self-contained build prompt (optimized for a separate coding agent).
+
+---
+
+#### 2.7 Destination coordinates — **LOCKED: Option C**
+
+Auto-end and checkpoint geofences need **numeric lat/lng**. Resolution order when Start Route is tapped (**first match wins**):
+
+1. **`routes.dest_lat` / `routes.dest_lng`** — explicit pin saved in editor (highest priority).  
+2. **Parse `routes.destination`** — if value matches `lat,lng` (map-drawn routes).  
+3. **Map waypoints JSON** — if `waypoints` is `{type:'map', points:[...]}`, use the point with `type:'end'`.  
+4. **Geocode `routes.destination` text** — Nominatim via existing `/api/geocode` logic; **use first result**, persist to `dest_lat/lng` on the route row for future trips.  
+5. **Fail** — return 400, show “Set destination on map”; do not start session.
+
+Same priority chain applies to **checkpoint** coords in the editor (stored `lat/lng` beats geocode).
+
+**UX notes:**
+
+- Map-built routes: Start works immediately (steps 2–3).  
+- Address-only routes: first Start may pause ~1 s for step 4, then cached.  
+- Desktop + mobile editors expose destination pin and per-checkpoint pins.
+
+---
+
+#### 2.8 Trip `source` on `route_logs` — **LOCKED**
+
+> **Not** on the `routes` table — `source` lives on each **`route_logs` row** (one trip / one history entry). The `routes` table is unchanged except for new optional geofence columns.
+
+`source` records *how that trip was logged*. It does not replace or overwrite `actual_mins`, `log_date`, `checkpoint_logs`, or any existing field.
+
+| `source` | Created by | Existing data impact |
+|---|---|---|
+| `manual` | Desktop **Log Route** modal (current behavior) | None — same POST `/api/routes/:id/logs` flow |
+| `live_session` | Mobile **Start Route** → End / auto-end | New flow only; writes `started_at`, `ended_at` |
+
+**Migration requirement (routes DB v2):**
+
+```sql
+ALTER TABLE route_logs ADD COLUMN source TEXT DEFAULT 'manual';
+-- then for every row that predates Phase 2:
+UPDATE route_logs SET source = 'manual' WHERE source IS NULL OR source = '';
+UPDATE route_logs SET status = 'completed' WHERE status IS NULL OR status = '';
+```
+
+- All historical rows → `source = 'manual'`, `status = 'completed'`.  
+- Manual logging after Phase 2 still writes `source = 'manual'`.  
+- Only Start Route creates `source = 'live_session'`.  
+- Stats/UI may filter on `source` later; **ignoring it must behave exactly as today.**
+
+**Example after Phase 2:**
+
+```
+route_logs
+┌────┬──────────┬─────────────┬────────────┬────────────┬─────────────┬──────────────┐
+│ id │ route_id │ source      │ status     │ started_at │ ended_at    │ actual_mins  │
+├────┼──────────┼─────────────┼────────────┼────────────┼─────────────┼──────────────┤
+│ 12 │ 3        │ manual      │ completed  │ NULL       │ NULL        │ 47           │  ← old habit
+│ 13 │ 3        │ live_session│ completed  │ 07:12:00   │ 07:58:00    │ 46           │  ← Start/End
+│ 14 │ 3        │ live_session│ active     │ 08:05:00   │ NULL        │ NULL         │  ← driving now
+└────┴──────────┴─────────────┴────────────┴────────────┴─────────────┴──────────────┘
+```
+
+Manual logging **remains available** on desktop for forgotten trips or editing past commutes; it never creates an `active` session.
+
+---
+
+### Deferred (was “mobile layout” in Phase 1 list)
+
+Item **#6 Mobile layout** (single-column CSS on existing `index.html`) is **superseded** by the dedicated mobile client above. Desktop dashboard stays as-is; no need to fully cram 3-column UI into one page on small screens.
+
+### In-progress / Next build (after Phase 2)
+
 1. **Regular hours click-to-edit** — per-day overrides table in calendar DB (`regular_hours_overrides`). Click any virtual chip to edit or remove that specific day without touching the global schedule.
 
 2. **Month view** — third calendar mode. Full month grid, event chips show abbreviated.
@@ -317,13 +577,11 @@ MLB_TRACKED_TEAM_ID=       # optional; comma-separated MLB team IDs to feature i
 
 5. **Event search** — substring match on title across all events. Search "Baseball" finds "Baseball Game". Results panel shows date, type, and a click-to-navigate link.
 
-6. **Mobile layout** — single-column CSS media query. 3-day calendar view auto-activates on screens under 500px (today ± 1 day). Bottom navigation bar for MLB/Schedule buttons. 44px minimum touch targets on all inputs.
-
-7. **Recurring events** — new `recurrences` table in calendar DB. Options: daily, weekly, biweekly, monthly. End date or "no end". Expanded virtually on the frontend (same as regular hours — no DB bloat). UI in the Add Event modal.
+6. **Recurring events** — new `recurrences` table in calendar DB. Options: daily, weekly, biweekly, monthly. End date or "no end". Expanded virtually on the frontend (same as regular hours — no DB bloat). UI in the Add Event modal.
 
 ### Longer term
 - **Google Calendar sync** (optional bidirectional push — lower priority than ICS feed)
-- **"Leaving in X" countdown** — set a route + departure time, get a browser notification when it's time to leave based on current ETA
+- **"Leaving in X" countdown** — set a route + departure time, get a browser notification when it's time to leave based on current ETA (complements Phase 2 Start Route)
 - **Server management UI** — dedicated web interface (or Electron app) to start/stop/restart WorkBuddy instances rather than using the batch file
 - **Webhook / chat bot integration** for external alerts
 - **Multi-user support** — currently single-user; `watched_person` setting is a step toward multi-user but DB structure would need user_id columns
