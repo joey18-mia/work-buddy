@@ -580,6 +580,7 @@ Item **#6 Mobile layout** (single-column CSS on existing `index.html`) is **supe
 6. **Recurring events** — new `recurrences` table in calendar DB. Options: daily, weekly, biweekly, monthly. End date or "no end". Expanded virtually on the frontend (same as regular hours — no DB bloat). UI in the Add Event modal.
 
 ### Longer term
+- **Remote access & login (Phase 2.5)** — single password, rate-limited login, 4-hour session expiry; build after mobile web app. See `PHASE2.5_REMOTE_ACCESS.md`.
 - **Google Calendar sync** (optional bidirectional push — lower priority than ICS feed)
 - **"Leaving in X" countdown** — set a route + departure time, get a browser notification when it's time to leave based on current ETA (complements Phase 2 Start Route)
 - **Server management UI** — dedicated web interface (or Electron app) to start/stop/restart WorkBuddy instances rather than using the batch file

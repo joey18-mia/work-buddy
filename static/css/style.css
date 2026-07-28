@@ -91,8 +91,24 @@ html,body{height:100%;background:var(--bg);color:var(--text-hi);font-family:'DM 
 .cp-item{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;}
 .cp-item:last-child{margin-bottom:0;}
 .cp-position{font-family:'DM Mono',monospace;font-size:10px;font-weight:600;background:var(--accent-dim);color:var(--accent);padding:2px 6px;border-radius:99px;flex-shrink:0;}
-.cp-item-name{flex:1;font-size:13px;color:var(--text-hi);}
-.cp-item-actions{display:flex;gap:5px;}
+.cp-item-name{font-size:13px;color:var(--text-hi);}
+.cp-item-body{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0;}
+.cp-item-geo{font-family:'DM Mono',monospace;font-size:10px;color:var(--text-lo);}
+.cp-item-geo.has-geo{color:var(--success);}
+.cp-item-actions{display:flex;gap:5px;flex-shrink:0;}
+.btn-sm.has-geo{border-color:var(--success);color:var(--success);}
+
+/* Pin picker */
+#pin-map{flex:1;min-height:360px;width:100%;background:#1a1a2e;cursor:crosshair;}
+[data-theme="dark"] #pin-map,[data-theme="dark-blue"] #pin-map,[data-theme="teal"] #pin-map,[data-theme="vice"] #pin-map{filter:brightness(.75) saturate(.75);}
+.pin-field{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-md);}
+.pin-field input{width:64px;background:var(--bg-card);border:1px solid var(--border-hi);border-radius:6px;padding:5px 8px;color:var(--text-hi);font-family:'DM Mono',monospace;font-size:12px;outline:none;text-align:center;}
+.pin-field input:focus{border-color:var(--accent);}
+
+/* Manual / Live source badge (history) */
+.src-badge{display:inline-block;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:1px 6px;border-radius:99px;margin-left:6px;vertical-align:middle;}
+.src-badge.src-live{background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent);}
+.src-badge.src-manual{background:var(--bg-hover);color:var(--text-lo);border:1px solid var(--border-hi);}
 .cp-log-section{display:flex;flex-direction:column;gap:6px;margin-top:4px;}
 .cp-log-header{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-lo);margin-top:8px;margin-bottom:2px;}
 .cp-log-row{display:flex;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:8px 10px;}

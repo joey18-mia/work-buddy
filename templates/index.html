@@ -248,6 +248,29 @@
   </div>
 </div>
 
+<!-- ═══════════ PIN PICKER (destination / checkpoint geofence) ═══════════ -->
+<div class="modal-overlay hidden" id="pin-modal">
+  <div class="modal modal-map">
+    <div class="modal-header">
+      <h3 id="pin-title">Set Location</h3>
+      <button class="close-btn" onclick="closeModal('pin-modal')">✕</button>
+    </div>
+    <div class="map-search-bar">
+      <input type="text" id="pin-search" placeholder="Search an address to drop a pin…" onkeydown="if(event.key==='Enter')pinSearch()">
+      <button class="btn-sm" onclick="pinSearch()">Go</button>
+      <span id="pin-coords" class="map-snap-notice">Click the map to place the pin</span>
+    </div>
+    <div id="pin-map"></div>
+    <div class="map-bottom-bar">
+      <div class="map-controls-left">
+        <label class="pin-field">Radius <input type="number" id="pin-radius" min="20" step="10" value="150" oninput="onPinRadiusInput()"> m</label>
+        <label class="pin-field" id="pin-autoend-wrap">Auto-end <input type="number" id="pin-autoend" min="0" step="1" value="5"> min</label>
+      </div>
+      <button class="btn-primary map-save-btn" onclick="savePin()">Save Location</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════ STANDARD MODALS ═══════════ -->
 
 <!-- Event Detail/Edit -->

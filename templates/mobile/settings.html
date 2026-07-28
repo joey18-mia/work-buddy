@@ -1,0 +1,49 @@
+{% extends "mobile/base.html" %}
+{% block title %}Settings · WorkBuddy{% endblock %}
+{% block page %}settings{% endblock %}
+{% block nav_settings %}active{% endblock %}
+{% block content %}
+
+<h1 class="m-h1">Settings</h1>
+
+<div class="m-card">
+  <label class="m-field-label" for="set-watched">Watched person (schedule name)</label>
+  <input class="m-input" id="set-watched" type="text" placeholder="Name to match in schedule">
+</div>
+
+<div class="m-card m-toggle-row" onclick="mToggle('regular_hours_enabled')">
+  <div class="m-toggle-text">
+    <div class="m-toggle-title">Regular hours</div>
+    <div class="m-toggle-sub">Show your default hours on the calendar</div>
+  </div>
+  <div class="m-switch" id="sw-regular_hours_enabled"><span class="m-switch-knob"></span></div>
+</div>
+
+<div class="m-card">
+  <label class="m-field-label">Regular hours window</label>
+  <div class="m-row2">
+    <input class="m-input" id="set-start" type="time">
+    <input class="m-input" id="set-end" type="time">
+  </div>
+</div>
+
+<div class="m-card m-toggle-row" onclick="mToggle('uploads_override')">
+  <div class="m-toggle-text">
+    <div class="m-toggle-title">Uploads override</div>
+    <div class="m-toggle-sub">Game days replace regular hours</div>
+  </div>
+  <div class="m-switch" id="sw-uploads_override"><span class="m-switch-knob"></span></div>
+</div>
+
+<div class="m-card">
+  <label class="m-field-label">Time format</label>
+  <div class="m-seg">
+    <button class="m-seg-btn" data-fmt="12h" onclick="mSetFormat('12h')">12h</button>
+    <button class="m-seg-btn" data-fmt="24h" onclick="mSetFormat('24h')">24h</button>
+  </div>
+</div>
+
+<button class="m-btn" onclick="saveMobileSettings()">Save Settings</button>
+<div id="m-settings-msg" class="m-msg"></div>
+
+{% endblock %}

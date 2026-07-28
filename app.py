@@ -1,10 +1,21 @@
 import os
+import sys
+import json
+import math
 import time
 import queue
 import logging
 import socket
 import threading
 import requests
+
+# Windows consoles default to cp1252, which can't encode arrows/emoji used in
+# our log lines. Force UTF-8 so logging never crashes on non-ASCII characters.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from datetime import date, timedelta, datetime
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 from dotenv import load_dotenv
@@ -30,6 +41,13 @@ CONNECTIONS: dict = {}
 PID_FILE    = os.path.join(BASE_DIR, "workbuddy.pid")
 UPTIME_FILE = os.path.join(BASE_DIR, "workbuddy.uptime")
 
+# In-memory geofence state for active live sessions (NOT a breadcrumb trail).
+# { session_id: {"passed": set[int], "dwell_start": float|None,
+#                "last_lat": float, "last_lng": float, "last_loc_at": float} }
+SESSION_STATE: dict = {}
+_session_lock = threading.Lock()
+GPS_STALE_SECS = 90  # no fix within this window → report gps_ok=False
+
 # ─────────────────────────────────────────────────────────────
 #  LOGGING + SSE
 # ─────────────────────────────────────────────────────────────
@@ -48,7 +66,7 @@ class _SSEHandler(logging.Handler):
                 except: dead.append(q)
             for q in dead: _sse_clients.remove(q)
 
-_fh = logging.FileHandler(LOG_PATH)
+_fh = logging.FileHandler(LOG_PATH, encoding="utf-8")
 _fh.setFormatter(logging.Formatter("%(asctime)s  %(message)s", "%Y-%m-%d %H:%M:%S"))
 _sh = _SSEHandler()
 _sh.setFormatter(logging.Formatter("%(asctime)s  %(message)s", "%Y-%m-%d %H:%M:%S"))
@@ -94,6 +112,46 @@ def index():
 @app.route("/console")
 def console():
     return render_template("console.html")
+
+
+# ─────────────────────────────────────────────────────────────
+#  MOBILE PAGES  (/m/)  — bookmarkable, server-rendered
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/m/")
+def m_home():
+    return render_template("mobile/home.html")
+
+@app.route("/m/routes")
+def m_routes():
+    return render_template("mobile/routes.html")
+
+@app.route("/m/routes/<int:route_id>")
+def m_route_detail(route_id):
+    return render_template("mobile/route_detail.html", route_id=route_id)
+
+@app.route("/m/calendar")
+def m_calendar():
+    return render_template("mobile/calendar.html")
+
+@app.route("/m/settings")
+def m_settings():
+    return render_template("mobile/settings.html")
+
+@app.route("/m/manifest.webmanifest")
+def m_manifest():
+    manifest = {
+        "name": "WorkBuddy",
+        "short_name": "WorkBuddy",
+        "start_url": "/m/",
+        "scope": "/m/",
+        "display": "standalone",
+        "orientation": "portrait",
+        "background_color": "#060d18",
+        "theme_color": "#0b1525",
+        "description": "Live route sessions and schedule for WorkBuddy.",
+    }
+    return Response(json.dumps(manifest), mimetype="application/manifest+json")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -359,6 +417,31 @@ def add_route():
     db.close()
     return jsonify(dict(row)), 201
 
+@app.route("/api/routes/<int:route_id>", methods=["PUT"])
+def update_route(route_id):
+    """Partial update. Supports geofence fields (dest_lat/lng, dest_radius_m,
+    auto_end_minutes) plus name/origin/destination/waypoints."""
+    data = request.json or {}
+    db   = get_routes_db()
+    row  = db.execute("SELECT id FROM routes WHERE id=?", (route_id,)).fetchone()
+    if not row:
+        db.close()
+        return jsonify({"error": "Route not found"}), 404
+    allowed = ("name", "origin", "destination", "waypoints",
+               "dest_lat", "dest_lng", "dest_radius_m", "auto_end_minutes")
+    sets, vals = [], []
+    for key in allowed:
+        if key in data:
+            sets.append(f"{key}=?")
+            vals.append(data[key])
+    if sets:
+        vals.append(route_id)
+        db.execute(f"UPDATE routes SET {', '.join(sets)} WHERE id=?", vals)
+        db.commit()
+    updated = db.execute("SELECT * FROM routes WHERE id=?", (route_id,)).fetchone()
+    db.close()
+    return jsonify(dict(updated))
+
 @app.route("/api/routes/<int:route_id>", methods=["DELETE"])
 def delete_route(route_id):
     db = get_routes_db()
@@ -442,12 +525,19 @@ def add_checkpoint(route_id):
 
 @app.route("/api/checkpoints/<int:cp_id>", methods=["PUT"])
 def update_checkpoint(cp_id):
-    data = request.json
+    data = request.json or {}
     db   = get_routes_db()
     if data.get("name"):
         db.execute("UPDATE checkpoints SET name=? WHERE id=?", (data["name"], cp_id))
     if data.get("position") is not None:
         db.execute("UPDATE checkpoints SET position=? WHERE id=?", (data["position"], cp_id))
+    # Geofence coords (Phase 2) — each set independently so partial saves work.
+    if "lat" in data:
+        db.execute("UPDATE checkpoints SET lat=? WHERE id=?", (data["lat"], cp_id))
+    if "lng" in data:
+        db.execute("UPDATE checkpoints SET lng=? WHERE id=?", (data["lng"], cp_id))
+    if "radius_m" in data:
+        db.execute("UPDATE checkpoints SET radius_m=? WHERE id=?", (data["radius_m"], cp_id))
     db.commit()
     row = db.execute("SELECT * FROM checkpoints WHERE id=?", (cp_id,)).fetchone()
     db.close()
@@ -468,8 +558,11 @@ def delete_checkpoint(cp_id):
 @app.route("/api/routes/<int:route_id>/logs", methods=["GET"])
 def get_logs(route_id):
     db   = get_routes_db()
+    # Exclude in-progress live sessions (status='active') so they don't show
+    # as 0-minute trips; completed/auto_completed/manual logs are included.
     logs = db.execute(
-        "SELECT * FROM route_logs WHERE route_id=? ORDER BY log_date DESC",
+        "SELECT * FROM route_logs WHERE route_id=? AND COALESCE(status,'completed')!='active' "
+        "ORDER BY log_date DESC",
         (route_id,)).fetchall()
     result = []
     for log_row in logs:
@@ -520,6 +613,428 @@ def add_log(route_id):
     db.close()
     api_log.info(f"ROUTE_LOG| route_id={route_id} | total={data['actual_mins']}min | checkpoints={saved_cp}")
     return jsonify(dict(row)), 201
+
+
+# ─────────────────────────────────────────────────────────────
+#  LIVE ROUTE SESSIONS  (Phase 2)
+# ─────────────────────────────────────────────────────────────
+#  A live session is a route_logs row with status='active' and
+#  source='live_session'.  Only ONE may be active globally.
+#  Note: GPS / geofence logic is added later (steps 3 & 5); these
+#  endpoints cover the session lifecycle only.
+# ─────────────────────────────────────────────────────────────
+
+_ISO_FMTS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
+             "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%f")
+
+def _now_iso():
+    """Match the DB's datetime('now','localtime') text format."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def _parse_iso(ts):
+    if not ts:
+        return None
+    for fmt in _ISO_FMTS:
+        try:
+            return datetime.strptime(ts, fmt)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+def _elapsed_seconds(started_at, ended_at=None):
+    start = _parse_iso(started_at)
+    if not start:
+        return 0
+    end = _parse_iso(ended_at) if ended_at else datetime.now()
+    if not end:
+        end = datetime.now()
+    return max(0, int((end - start).total_seconds()))
+
+def _elapsed_minutes(started_at, ended_at=None):
+    return round(_elapsed_seconds(started_at, ended_at) / 60.0, 1)
+
+def _find_active_session(db):
+    return db.execute(
+        "SELECT * FROM route_logs WHERE status='active' AND source='live_session' "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+
+
+# ── Destination coordinate resolver (Option C priority chain) ──
+
+def _parse_latlng(text):
+    """Parse a 'lat,lng' string into (lat, lng) if valid, else None."""
+    if not text:
+        return None
+    parts = str(text).split(",")
+    if len(parts) != 2:
+        return None
+    try:
+        lat, lng = float(parts[0].strip()), float(parts[1].strip())
+    except (ValueError, TypeError):
+        return None
+    if -90 <= lat <= 90 and -180 <= lng <= 180:
+        return (lat, lng)
+    return None
+
+def _waypoints_end_point(waypoints):
+    """Return (lat, lng) of the JSON waypoint with type=='end', else None."""
+    if not waypoints:
+        return None
+    wp = str(waypoints).strip()
+    if not (wp.startswith("{") or wp.startswith("[")):
+        return None
+    try:
+        data = json.loads(wp)
+    except (ValueError, TypeError):
+        return None
+    pts = data.get("points", []) if isinstance(data, dict) else data
+    if not isinstance(pts, list):
+        return None
+    for p in pts:
+        if isinstance(p, dict) and p.get("type") == "end" \
+                and p.get("lat") is not None and p.get("lng") is not None:
+            try:
+                return (float(p["lat"]), float(p["lng"]))
+            except (ValueError, TypeError):
+                return None
+    return None
+
+def _geocode_text(addr):
+    """Geocode free text to (lat, lng). TomTom if keyed, else Nominatim."""
+    if not addr:
+        return None
+    if TOMTOM_KEY:
+        try:
+            r = requests.get(
+                f"https://api.tomtom.com/search/2/geocode/{requests.utils.quote(addr)}.json",
+                params={"key": TOMTOM_KEY, "countrySet": "US", "limit": 1}, timeout=8)
+            r.raise_for_status()
+            pos = r.json()["results"][0]["position"]
+            return (float(pos["lat"]), float(pos["lon"]))
+        except Exception:
+            pass
+    try:
+        r = requests.get("https://nominatim.openstreetmap.org/search",
+                         params={"q": addr, "format": "json", "limit": 1},
+                         headers={"User-Agent": "WorkBuddy/1.0"}, timeout=8)
+        r.raise_for_status()
+        res = r.json()
+        if res:
+            return (float(res[0]["lat"]), float(res[0]["lon"]))
+    except Exception:
+        pass
+    return None
+
+def _resolve_destination_coords(db, route):
+    """
+    Option C priority chain → (lat, lng, method) or None:
+      1. route.dest_lat / dest_lng (already set)
+      2. route.destination parsed as 'lat,lng'
+      3. waypoints JSON point with type=='end'
+      4. geocode destination text (first result) — cached on route
+      5. None (caller fails Start with 400)
+    """
+    if route["dest_lat"] is not None and route["dest_lng"] is not None:
+        return (route["dest_lat"], route["dest_lng"], "route_dest")
+
+    ll = _parse_latlng(route["destination"])
+    if ll:
+        return (ll[0], ll[1], "destination_latlng")
+
+    ll = _waypoints_end_point(route["waypoints"])
+    if ll:
+        return (ll[0], ll[1], "waypoints_end")
+
+    ll = _geocode_text(route["destination"])
+    if ll:
+        db.execute("UPDATE routes SET dest_lat=?, dest_lng=? WHERE id=?",
+                   (ll[0], ll[1], route["id"]))
+        db.commit()
+        return (ll[0], ll[1], "geocoded")
+
+    return None
+
+
+# ── Geofence engine ──
+
+def _haversine_m(lat1, lng1, lat2, lng2):
+    """Great-circle distance in metres (no external deps)."""
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlng / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+def _session_state(db, session_id):
+    """Get (or lazily rebuild) in-memory geofence state for a session."""
+    with _session_lock:
+        st = SESSION_STATE.get(session_id)
+        if st is None:
+            # Rebuild passed-set from DB so a mid-drive server restart is safe.
+            rows = db.execute(
+                "SELECT checkpoint_id FROM checkpoint_logs WHERE route_log_id=?",
+                (session_id,)).fetchall()
+            st = {"passed": {r["checkpoint_id"] for r in rows},
+                  "dwell_start": None, "last_lat": None,
+                  "last_lng": None, "last_loc_at": 0.0}
+            SESSION_STATE[session_id] = st
+        return st
+
+def _run_geofence(db, session, lat, lng, now_iso):
+    """
+    Process one location fix for an active session. Returns an events dict:
+      { "checkpoints_passed": [...], "auto_ended": bool, "actual_mins": float? }
+    Only the NEXT unpassed (coord-bearing) checkpoint is evaluated per fix.
+    """
+    sid    = session["id"]
+    events = {"checkpoints_passed": [], "auto_ended": False}
+    route  = db.execute("SELECT * FROM routes WHERE id=?", (session["route_id"],)).fetchone()
+
+    st = _session_state(db, sid)
+    with _session_lock:
+        st["last_lat"], st["last_lng"] = lat, lng
+        st["last_loc_at"] = time.time()
+        passed = set(st["passed"])
+
+    # (2) Next unpassed checkpoint in order that actually has coords.
+    cps = db.execute(
+        "SELECT * FROM checkpoints WHERE route_id=? ORDER BY position, id",
+        (session["route_id"],)).fetchall()
+    for c in cps:
+        if c["id"] in passed:
+            continue
+        if c["lat"] is None or c["lng"] is None:
+            continue  # not geofenceable — don't let it block later checkpoints
+        radius = c["radius_m"] if c["radius_m"] is not None else 150
+        if _haversine_m(lat, lng, c["lat"], c["lng"]) <= radius:
+            mins = _elapsed_minutes(session["started_at"], now_iso)
+            db.execute(
+                "INSERT INTO checkpoint_logs (route_log_id, checkpoint_id, minutes_from_start, passed_at) "
+                "VALUES (?,?,?,?)", (sid, c["id"], mins, now_iso))
+            db.commit()
+            with _session_lock:
+                st["passed"].add(c["id"])
+            events["checkpoints_passed"].append(
+                {"id": c["id"], "name": c["name"], "minutes_from_start": mins})
+        break  # evaluate only the next gate per fix
+
+    # (3)/(4) Destination dwell → auto-end.
+    dest_lat, dest_lng = route["dest_lat"], route["dest_lng"]
+    if dest_lat is not None and dest_lng is not None:
+        dest_radius = route["dest_radius_m"]   if route["dest_radius_m"]   is not None else 150
+        auto_end    = route["auto_end_minutes"] if route["auto_end_minutes"] is not None else 5
+        inside = _haversine_m(lat, lng, dest_lat, dest_lng) <= dest_radius
+        now_ts = time.time()
+        with _session_lock:
+            if inside:
+                if st["dwell_start"] is None:
+                    st["dwell_start"] = now_ts
+                dwell_secs = now_ts - st["dwell_start"]
+            else:
+                st["dwell_start"] = None      # left the geofence → reset dwell
+                dwell_secs = 0.0
+        if inside and dwell_secs >= auto_end * 60:
+            actual = _elapsed_minutes(session["started_at"], now_iso)
+            db.execute(
+                "UPDATE route_logs SET status='auto_completed', ended_at=?, actual_mins=? WHERE id=?",
+                (now_iso, actual, sid))
+            db.commit()
+            events["auto_ended"] = True
+            events["actual_mins"] = actual
+            with _session_lock:
+                SESSION_STATE.pop(sid, None)
+
+    return events
+
+
+@app.route("/api/sessions/active", methods=["GET"])
+def get_active_session():
+    """Return the single active live session (with route name) or null."""
+    db  = get_routes_db()
+    row = db.execute("""
+        SELECT rl.*, r.name AS route_name
+        FROM route_logs rl JOIN routes r ON r.id = rl.route_id
+        WHERE rl.status='active' AND rl.source='live_session'
+        ORDER BY rl.id DESC LIMIT 1
+    """).fetchone()
+    db.close()
+    return jsonify(dict(row) if row else None)
+
+@app.route("/api/routes/<int:route_id>/sessions/start", methods=["POST"])
+def start_session(route_id):
+    """
+    Begin a live route session. One globally: 409 if another is active.
+    Destination-coord resolution (priority chain) is added in step 3.
+    """
+    db    = get_routes_db()
+    route = db.execute("SELECT * FROM routes WHERE id=?", (route_id,)).fetchone()
+    if not route:
+        db.close()
+        return jsonify({"error": "Route not found"}), 404
+
+    active = _find_active_session(db)
+    if active:
+        db.close()
+        return jsonify({
+            "error": "A route session is already active. End or cancel it first.",
+            "active_session_id": active["id"],
+        }), 409
+
+    resolved = _resolve_destination_coords(db, route)
+    if not resolved:
+        db.close()
+        return jsonify({
+            "error": "Could not resolve destination coordinates for this route. "
+                     "Set a destination pin, use a 'lat,lng' destination, or a geocodable address."
+        }), 400
+    dest_lat, dest_lng, dest_method = resolved
+
+    now_iso = _now_iso()
+    cur = db.execute(
+        "INSERT INTO route_logs (route_id, log_date, actual_mins, status, source, started_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (route_id, date.today().isoformat(), 0, "active", "live_session", now_iso))
+    db.commit()
+    row = db.execute("SELECT * FROM route_logs WHERE id=?", (cur.lastrowid,)).fetchone()
+    db.close()
+    api_log.info(f"SESSION  | START | route_id={route_id} | session_id={cur.lastrowid} "
+                 f"| dest=({dest_lat},{dest_lng}) via {dest_method} | {now_iso}")
+    result = dict(row)
+    result.update({"dest_lat": dest_lat, "dest_lng": dest_lng, "dest_method": dest_method})
+    return jsonify(result), 201
+
+@app.route("/api/sessions/<int:session_id>", methods=["GET"])
+def get_session(session_id):
+    """Session status: elapsed seconds + checkpoint hit/miss list."""
+    db  = get_routes_db()
+    row = db.execute("""
+        SELECT rl.*, r.name AS route_name
+        FROM route_logs rl JOIN routes r ON r.id = rl.route_id
+        WHERE rl.id=?
+    """, (session_id,)).fetchone()
+    if not row:
+        db.close()
+        return jsonify({"error": "Session not found"}), 404
+
+    cps  = db.execute(
+        "SELECT * FROM checkpoints WHERE route_id=? ORDER BY position, id",
+        (row["route_id"],)).fetchall()
+    hits = db.execute(
+        "SELECT checkpoint_id, minutes_from_start, passed_at FROM checkpoint_logs WHERE route_log_id=?",
+        (session_id,)).fetchall()
+    db.close()
+
+    hit_map = {h["checkpoint_id"]: dict(h) for h in hits}
+    checkpoints = []
+    for c in cps:
+        h = hit_map.get(c["id"])
+        checkpoints.append({
+            "id": c["id"], "name": c["name"], "position": c["position"],
+            "passed": bool(h),
+            "minutes_from_start": h["minutes_from_start"] if h else None,
+            "passed_at": h["passed_at"] if h else None,
+        })
+
+    gps_ok = True
+    if row["status"] == "active":
+        with _session_lock:
+            st = SESSION_STATE.get(session_id)
+        if st and st.get("last_loc_at"):
+            gps_ok = (time.time() - st["last_loc_at"]) < GPS_STALE_SECS
+
+    result = dict(row)
+    result.update({
+        "elapsed_seconds":    _elapsed_seconds(row["started_at"], row["ended_at"]),
+        "checkpoints":        checkpoints,
+        "checkpoints_hit":    len(hits),
+        "checkpoints_total":  len(cps),
+        "gps_ok":             gps_ok,
+    })
+    return jsonify(result)
+
+@app.route("/api/sessions/<int:session_id>/location", methods=["POST"])
+def session_location(session_id):
+    """Ingest a GPS fix and run the geofence engine. Ignored if not active."""
+    data = request.json or {}
+    lat, lng = data.get("lat"), data.get("lng")
+    if lat is None or lng is None:
+        return jsonify({"error": "lat and lng required"}), 400
+    try:
+        lat, lng = float(lat), float(lng)
+    except (ValueError, TypeError):
+        return jsonify({"error": "lat/lng must be numeric"}), 400
+
+    db      = get_routes_db()
+    session = db.execute("SELECT * FROM route_logs WHERE id=?", (session_id,)).fetchone()
+    if not session:
+        db.close()
+        return jsonify({"error": "Session not found"}), 404
+    if session["status"] != "active":
+        db.close()
+        return jsonify({"status": session["status"], "ignored": True})
+
+    now_iso = _now_iso()
+    events  = _run_geofence(db, session, lat, lng, now_iso)
+    updated = db.execute("SELECT status FROM route_logs WHERE id=?", (session_id,)).fetchone()
+    db.close()
+
+    for c in events.get("checkpoints_passed", []):
+        api_log.info(f"SESSION  | CHECKPOINT | session_id={session_id} | "
+                     f"{c['name']} @ {c['minutes_from_start']}min")
+    if events.get("auto_ended"):
+        api_log.info(f"SESSION  | AUTO-END | session_id={session_id} | "
+                     f"actual={events.get('actual_mins')}min")
+
+    return jsonify({"status": updated["status"], "events": events})
+
+@app.route("/api/sessions/<int:session_id>/end", methods=["POST"])
+def end_session(session_id):
+    """Manual end → status=completed, compute actual_mins from elapsed."""
+    db  = get_routes_db()
+    row = db.execute("SELECT * FROM route_logs WHERE id=?", (session_id,)).fetchone()
+    if not row:
+        db.close()
+        return jsonify({"error": "Session not found"}), 404
+    if row["status"] != "active":
+        db.close()
+        return jsonify({"error": f"Session is not active (status={row['status']})"}), 409
+
+    now_iso = _now_iso()
+    actual  = _elapsed_minutes(row["started_at"], now_iso)
+    db.execute(
+        "UPDATE route_logs SET status='completed', ended_at=?, actual_mins=? WHERE id=?",
+        (now_iso, actual, session_id))
+    db.commit()
+    updated = db.execute("SELECT * FROM route_logs WHERE id=?", (session_id,)).fetchone()
+    db.close()
+    with _session_lock:
+        SESSION_STATE.pop(session_id, None)
+    api_log.info(f"SESSION  | END | session_id={session_id} | actual={actual}min")
+    return jsonify(dict(updated))
+
+@app.route("/api/sessions/<int:session_id>/cancel", methods=["POST"])
+def cancel_session(session_id):
+    """
+    Cancel a session. Decision: DELETE the row (cascades checkpoint_logs)
+    so cancelled drives never pollute history or stats.
+    """
+    db  = get_routes_db()
+    row = db.execute("SELECT * FROM route_logs WHERE id=?", (session_id,)).fetchone()
+    if not row:
+        db.close()
+        return jsonify({"error": "Session not found"}), 404
+    if row["status"] != "active":
+        db.close()
+        return jsonify({"error": f"Session is not active (status={row['status']})"}), 409
+
+    db.execute("DELETE FROM route_logs WHERE id=?", (session_id,))
+    db.commit(); db.close()
+    with _session_lock:
+        SESSION_STATE.pop(session_id, None)
+    api_log.info(f"SESSION  | CANCEL | session_id={session_id} (row deleted)")
+    return jsonify({"cancelled": session_id})
 
 
 # ─────────────────────────────────────────────────────────────

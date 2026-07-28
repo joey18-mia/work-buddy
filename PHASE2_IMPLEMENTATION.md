@@ -185,17 +185,17 @@ Request geolocation permission on first Start.
 
 ## Acceptance criteria
 
-- [ ] Existing `route_logs` rows all have `source='manual'` after migration.  
-- [ ] Manual Log Route on desktop still works; creates `source=manual` only.  
-- [ ] Cannot start two sessions; 409 on second Start.  
-- [ ] Start Route records `started_at`; End computes `actual_mins` without user typing minutes.  
-- [ ] Map-drawn route starts without geocode.  
-- [ ] Text destination geocodes once, caches `dest_lat/lng`.  
-- [ ] Checkpoint auto-log fires once per checkpoint when inside 150 m.  
-- [ ] Auto-end after 5 min (configurable) inside destination geofence.  
-- [ ] GPS loss: timer runs, geofence paused, 30 s retry, manual End works.  
-- [ ] No continuous GPS track stored in DB.  
-- [ ] Mobile pages usable at 375px width; buttons ≥ 44px.
+- [x] Existing `route_logs` rows all have `source='manual'` after migration.  
+- [x] Manual Log Route on desktop still works; creates `source=manual` only.  
+- [x] Cannot start two sessions; 409 on second Start.  
+- [x] Start Route records `started_at`; End computes `actual_mins` without user typing minutes.  
+- [x] Map-drawn route starts without geocode.  
+- [x] Text destination geocodes once, caches `dest_lat/lng`.  
+- [x] Checkpoint auto-log fires once per checkpoint when inside 150 m.  
+- [x] Auto-end after 5 min (configurable) inside destination geofence.  
+- [x] GPS loss: timer runs, geofence paused, 30 s retry, manual End works.  
+- [x] No continuous GPS track stored in DB.  
+- [x] Mobile pages usable at 375px width; buttons ≥ 44px.
 
 ---
 
@@ -204,8 +204,15 @@ Request geolocation permission on first Start.
 - Native iOS/Android app / Capacitor background GPS  
 - Route stats charts (Phase 3 item)  
 - ICS feed, month view, recurring events  
-- Multi-user auth  
+- Login, rate limiting, session expiry — **Phase 2.5** (see `PHASE2.5_REMOTE_ACCESS.md`; build after mobile web app is complete)  
+- Multi-user / OAuth accounts  
 - Changes to calendar/traffic/weather logic beyond mobile display  
+
+---
+
+## After Phase 2 — remote access (Phase 2.5)
+
+When the mobile web app is finished, implement **login + rate limiting + 4-hour auto sign-out** so the server can be reached safely from outside the LAN. Full spec: **`PHASE2.5_REMOTE_ACCESS.md`**.
 
 ---
 

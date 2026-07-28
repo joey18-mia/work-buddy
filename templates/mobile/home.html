@@ -1,0 +1,41 @@
+{% extends "mobile/base.html" %}
+{% block title %}WorkBuddy{% endblock %}
+{% block page %}home{% endblock %}
+{% block nav_home %}active{% endblock %}
+{% block content %}
+
+<div class="m-date" id="m-date">—</div>
+
+<a id="m-active-banner" class="m-active-banner hidden" href="#">
+  <span class="m-live-dot"></span>
+  <div class="m-active-text">
+    <div class="m-active-title">Route in progress</div>
+    <div class="m-active-sub" id="m-active-route">—</div>
+  </div>
+  <span class="m-chev">›</span>
+</a>
+
+<div class="m-card m-weather-card">
+  <div class="m-weather-temp" id="m-weather-temp">—</div>
+  <div class="m-weather-desc" id="m-weather-desc">Loading weather…</div>
+</div>
+
+<a href="/m/routes" class="m-card m-link-card">
+  <span class="m-link-ico">🛣️</span>
+  <div class="m-link-text">
+    <div class="m-link-title">Routes</div>
+    <div class="m-link-sub">Start a live drive</div>
+  </div>
+  <span class="m-chev">›</span>
+</a>
+
+<a href="/m/calendar" class="m-card m-link-card">
+  <span class="m-link-ico">📅</span>
+  <div class="m-link-text">
+    <div class="m-link-title">Calendar</div>
+    <div class="m-link-sub">Upcoming events</div>
+  </div>
+  <span class="m-chev">›</span>
+</a>
+
+{% endblock %}

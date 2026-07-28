@@ -23,6 +23,14 @@ import threading
 import webbrowser
 import requests as _req
 
+# Windows consoles default to cp1252; force UTF-8 so print()/logging with
+# arrows or emoji never raises UnicodeEncodeError.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT     = int(os.environ.get("PORT", 5000))
 BASE_URL = f"http://localhost:{PORT}"

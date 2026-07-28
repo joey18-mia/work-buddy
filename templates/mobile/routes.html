@@ -1,0 +1,22 @@
+{% extends "mobile/base.html" %}
+{% block title %}Routes · WorkBuddy{% endblock %}
+{% block page %}routes{% endblock %}
+{% block nav_routes %}active{% endblock %}
+{% block content %}
+
+<h1 class="m-h1">Routes</h1>
+
+<a id="m-active-banner" class="m-active-banner hidden" href="#">
+  <span class="m-live-dot"></span>
+  <div class="m-active-text">
+    <div class="m-active-title">Route in progress</div>
+    <div class="m-active-sub" id="m-active-route">—</div>
+  </div>
+  <span class="m-chev">›</span>
+</a>
+
+<div id="m-routes-list" class="m-list">
+  <div class="m-empty">Loading…</div>
+</div>
+
+{% endblock %}

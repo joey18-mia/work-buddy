@@ -24,6 +24,10 @@ const state = {
   mapMarkers:     [],
   mapSegments:    [],
   mapHasEnd:      false,
+  pin:            null,   // active pin-picker context
+  pinMap:         null,   // persistent Leaflet map for the pin picker
+  pinMarker:      null,
+  pinCircle:      null,
 };
 
 // ─────────────────────────────────────────────
@@ -520,6 +524,7 @@ function renderRouteCarousel() {
         <button class="btn-sm primary" onclick="getETA(${r.id})">📍 ETA</button>
         <button class="btn-sm" onclick="openLogModal(${r.id},'${escHtml(r.name)}')">📋 Log</button>
         <button class="btn-sm" onclick="openCheckpoints(${r.id},'${escHtml(r.name)}')">📌 Checkpoints</button>
+        <button class="btn-sm ${Number.isFinite(r.dest_lat)?'has-geo':''}" onclick="openDestinationEditor(${r.id},'${escHtml(r.name)}')">🎯 Destination</button>
         <button class="btn-sm" onclick="openHistory(${r.id},'${escHtml(r.name)}')">📊 History</button>
         <button class="btn-sm danger" onclick="deleteRoute(${r.id})">✕</button>
       </div>
@@ -626,8 +631,13 @@ async function openHistory(routeId, routeName) {
         </td></tr>`;
       }
 
+      const isLive  = l.source === 'live_session' || l.status === 'auto_completed';
+      const badge   = isLive
+        ? `<span class="src-badge src-live">Live</span>`
+        : `<span class="src-badge src-manual">Manual</span>`;
+
       return `<tr>
-        <td>${l.log_date}</td>
+        <td>${l.log_date} ${badge}</td>
         <td>${l.estimated_mins!=null?l.estimated_mins+' min':'—'}</td>
         <td>${l.actual_mins} min</td>
         <td class="${diffCls}">${diffStr}</td>
@@ -661,15 +671,25 @@ async function loadCheckpointList(routeId) {
       body.innerHTML = `<div class="day-empty" style="padding:14px">No checkpoints yet. Add your first stop below.</div>`;
       return;
     }
-    body.innerHTML = cps.map(cp => `
+    body.innerHTML = cps.map(cp => {
+      const hasGeo = Number.isFinite(cp.lat) && Number.isFinite(cp.lng);
+      const geoLabel = hasGeo
+        ? `📍 ${cp.lat.toFixed(4)},${cp.lng.toFixed(4)} · ${cp.radius_m ?? 150}m`
+        : 'No pin set';
+      return `
       <div class="cp-item" id="cp-item-${cp.id}">
         <span class="cp-position">${cp.position}</span>
-        <span class="cp-item-name" id="cp-name-${cp.id}">${cp.name}</span>
+        <div class="cp-item-body">
+          <span class="cp-item-name" id="cp-name-${cp.id}">${cp.name}</span>
+          <span class="cp-item-geo ${hasGeo?'has-geo':''}">${geoLabel}</span>
+        </div>
         <div class="cp-item-actions">
+          <button class="btn-sm ${hasGeo?'has-geo':''}" onclick="openCheckpointPin(${cp.id},'${escHtml(cp.name)}')">📍 Pin</button>
           <button class="btn-sm" onclick="renameCheckpoint(${cp.id})">✎</button>
           <button class="btn-sm danger" onclick="deleteCheckpoint(${cp.id}, ${routeId})">✕</button>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   } catch { body.innerHTML = `<div class="day-empty" style="padding:14px">Error loading checkpoints.</div>`; }
 }
 
@@ -1080,6 +1100,132 @@ async function saveMapRoute() {
     await fetchJSON('/api/routes','POST',{name,origin:`${sp.lat.toFixed(6)},${sp.lng.toFixed(6)}`,destination:`${ep.lat.toFixed(6)},${ep.lng.toFixed(6)}`,waypoints:JSON.stringify({type:'map',points:state.mapPoints.map(p=>({lat:p.lat,lng:p.lng,type:p.type}))})});
     mapClear(); closeMapBuilder(); loadRoutes();
   } catch(e){alert(`Save failed: ${e.message}`);}
+}
+
+// ─────────────────────────────────────────────
+//  PIN PICKER  (destination + checkpoint geofence)
+// ─────────────────────────────────────────────
+function makePinIcon() {
+  // Custom teardrop pin — Leaflet's default marker images don't load from the CDN CSS.
+  return L.divIcon({
+    className: 'pin-marker-icon',
+    html: `<div style="width:22px;height:22px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:var(--danger,#ef4444);border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.55)"></div>`,
+    iconSize: [22, 22], iconAnchor: [11, 22],
+  });
+}
+function openPinPicker(opts) {
+  // opts: {title, lat, lng, radius, showAutoEnd, autoEnd, onSave}
+  state.pin = { lat: Number.isFinite(opts.lat) ? opts.lat : null,
+                lng: Number.isFinite(opts.lng) ? opts.lng : null,
+                onSave: opts.onSave };
+  document.getElementById('pin-title').textContent = opts.title || 'Set Location';
+  document.getElementById('pin-radius').value = opts.radius ?? 150;
+  document.getElementById('pin-search').value = '';
+  const aeWrap = document.getElementById('pin-autoend-wrap');
+  aeWrap.style.display = opts.showAutoEnd ? '' : 'none';
+  if (opts.showAutoEnd) document.getElementById('pin-autoend').value = opts.autoEnd ?? 5;
+  // Clear any marker/circle left from a previous open.
+  if (state.pinMarker && state.pinMap) { state.pinMap.removeLayer(state.pinMarker); state.pinMarker = null; }
+  if (state.pinCircle && state.pinMap) { state.pinMap.removeLayer(state.pinCircle); state.pinCircle = null; }
+  updatePinCoords();
+  openModal('pin-modal');
+  setTimeout(() => initPinMap(), 150);
+}
+function initPinMap() {
+  const hasPt = Number.isFinite(state.pin.lat) && Number.isFinite(state.pin.lng);
+  const bodyLat = parseFloat(document.body.dataset.mapLat);
+  const bodyLng = parseFloat(document.body.dataset.mapLng);
+  const center = hasPt ? [state.pin.lat, state.pin.lng]
+    : (Number.isFinite(bodyLat) && Number.isFinite(bodyLng) ? [bodyLat, bodyLng] : [39.8283, -98.5795]);
+  const zoom = hasPt ? 15 : (Number.isFinite(bodyLat) ? 12 : 4);
+  if (!state.pinMap) {
+    state.pinMap = L.map('pin-map', { zoomControl: true }).setView(center, zoom);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { attribution: '© OpenStreetMap contributors', maxZoom: 19 }).addTo(state.pinMap);
+    state.pinMap.on('click', e => setPinPoint(e.latlng.lat, e.latlng.lng));
+  } else {
+    state.pinMap.setView(center, zoom);
+    state.pinMap.invalidateSize();
+  }
+  if (hasPt) setPinPoint(state.pin.lat, state.pin.lng);
+}
+function setPinPoint(lat, lng) {
+  state.pin.lat = lat; state.pin.lng = lng;
+  const radius = parseFloat(document.getElementById('pin-radius').value) || 150;
+  if (!state.pinMarker) {
+    state.pinMarker = L.marker([lat, lng], { icon: makePinIcon(), draggable: true }).addTo(state.pinMap);
+    state.pinMarker.on('dragend', () => { const p = state.pinMarker.getLatLng(); setPinPoint(p.lat, p.lng); });
+  } else {
+    state.pinMarker.setLatLng([lat, lng]);
+  }
+  if (!state.pinCircle) {
+    state.pinCircle = L.circle([lat, lng], { radius, color: '#00a3e0', weight: 2, fillColor: '#00a3e0', fillOpacity: .2 }).addTo(state.pinMap);
+  } else {
+    state.pinCircle.setLatLng([lat, lng]); state.pinCircle.setRadius(radius);
+  }
+  updatePinCoords();
+}
+function updatePinCoords() {
+  const el = document.getElementById('pin-coords');
+  if (!el) return;
+  el.textContent = (Number.isFinite(state.pin?.lat) && Number.isFinite(state.pin?.lng))
+    ? `📍 Pin set at ${state.pin.lat.toFixed(6)}, ${state.pin.lng.toFixed(6)}`
+    : 'Click the map to place the pin';
+}
+async function pinSearch() {
+  const q = document.getElementById('pin-search').value.trim();
+  if (!q || !state.pinMap) return;
+  try { const d = await fetchJSON(`/api/geocode?q=${encodeURIComponent(q)}`); state.pinMap.setView([d.lat, d.lng], 15); setPinPoint(d.lat, d.lng); }
+  catch { alert('Address not found.'); }
+}
+// Live-update the circle as the radius field changes.
+function onPinRadiusInput() {
+  if (state.pinCircle && Number.isFinite(state.pin?.lat)) {
+    state.pinCircle.setRadius(parseFloat(document.getElementById('pin-radius').value) || 150);
+  }
+}
+async function savePin() {
+  if (!Number.isFinite(state.pin?.lat) || !Number.isFinite(state.pin?.lng)) return alert('Drop a pin on the map first.');
+  const radius = parseInt(document.getElementById('pin-radius').value) || 150;
+  const autoEnd = document.getElementById('pin-autoend-wrap').style.display !== 'none'
+    ? (parseInt(document.getElementById('pin-autoend').value) || 0) : null;
+  try { await state.pin.onSave(state.pin.lat, state.pin.lng, radius, autoEnd); closeModal('pin-modal'); }
+  catch (e) { alert(`Save failed: ${e.message}`); }
+}
+
+// Destination editor for a route
+function openDestinationEditor(routeId, routeName) {
+  const r = state.routes.find(x => x.id === routeId);
+  if (!r) return;
+  openPinPicker({
+    title: `Destination — ${routeName}`,
+    lat: r.dest_lat, lng: r.dest_lng,
+    radius: r.dest_radius_m ?? 150,
+    showAutoEnd: true, autoEnd: r.auto_end_minutes ?? 5,
+    onSave: async (lat, lng, radius, autoEnd) => {
+      const updated = await fetchJSON(`/api/routes/${routeId}`, 'PUT', {
+        dest_lat: lat, dest_lng: lng, dest_radius_m: radius, auto_end_minutes: autoEnd,
+      });
+      const idx = state.routes.findIndex(x => x.id === routeId);
+      if (idx >= 0) state.routes[idx] = updated;
+      renderRouteCarousel();
+    },
+  });
+}
+
+// Pin editor for a single checkpoint
+async function openCheckpointPin(cpId, cpName) {
+  const cps = await fetchJSON(`/api/routes/${state.activeCheckpointRoute}/checkpoints`);
+  const cp = cps.find(c => c.id === cpId) || {};
+  openPinPicker({
+    title: `Checkpoint — ${cpName}`,
+    lat: cp.lat, lng: cp.lng, radius: cp.radius_m ?? 150,
+    showAutoEnd: false,
+    onSave: async (lat, lng, radius) => {
+      await fetchJSON(`/api/checkpoints/${cpId}`, 'PUT', { lat, lng, radius_m: radius });
+      loadCheckpointList(state.activeCheckpointRoute);
+    },
+  });
 }
 
 // ─────────────────────────────────────────────

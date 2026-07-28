@@ -33,7 +33,7 @@ SETTINGS_DB  = os.path.join(DATABASES_DIR, "workbuddy_settings.db")
 
 # Current target versions — bump when adding a new migration
 CALENDAR_VERSION  = 1
-ROUTES_VERSION    = 1
+ROUTES_VERSION    = 2
 SETTINGS_VERSION  = 1
 
 log = logging.getLogger("workbuddy")
@@ -179,7 +179,56 @@ def _routes_v0_to_v1(conn):
 
     log.info("MIGRATE  | routes v0→v1 complete (routes, logs, checkpoints, checkpoint_logs)")
 
-ROUTES_MIGRATIONS = {1: _routes_v0_to_v1}
+
+def _routes_v1_to_v2(conn):
+    """
+    Phase 2 — live route sessions & geofencing support.
+    Strictly additive: only ADD COLUMN + backfill existing rows.
+      • routes:          destination coords + geofence radius + auto-end window
+      • checkpoints:     lat/lng + geofence radius
+      • route_logs:      session lifecycle (started/ended/status) + trip source
+      • checkpoint_logs: passed_at timestamp for auto-logged passes
+    """
+    # ── routes ──────────────────────────────────────────────
+    if not _col_exists(conn, "routes", "dest_lat"):
+        conn.execute("ALTER TABLE routes ADD COLUMN dest_lat REAL")
+    if not _col_exists(conn, "routes", "dest_lng"):
+        conn.execute("ALTER TABLE routes ADD COLUMN dest_lng REAL")
+    if not _col_exists(conn, "routes", "dest_radius_m"):
+        conn.execute("ALTER TABLE routes ADD COLUMN dest_radius_m INTEGER DEFAULT 150")
+    if not _col_exists(conn, "routes", "auto_end_minutes"):
+        conn.execute("ALTER TABLE routes ADD COLUMN auto_end_minutes INTEGER DEFAULT 5")
+
+    # ── checkpoints ─────────────────────────────────────────
+    if not _col_exists(conn, "checkpoints", "lat"):
+        conn.execute("ALTER TABLE checkpoints ADD COLUMN lat REAL")
+    if not _col_exists(conn, "checkpoints", "lng"):
+        conn.execute("ALTER TABLE checkpoints ADD COLUMN lng REAL")
+    if not _col_exists(conn, "checkpoints", "radius_m"):
+        conn.execute("ALTER TABLE checkpoints ADD COLUMN radius_m INTEGER DEFAULT 150")
+
+    # ── route_logs ──────────────────────────────────────────
+    if not _col_exists(conn, "route_logs", "started_at"):
+        conn.execute("ALTER TABLE route_logs ADD COLUMN started_at TEXT")
+    if not _col_exists(conn, "route_logs", "ended_at"):
+        conn.execute("ALTER TABLE route_logs ADD COLUMN ended_at TEXT")
+    if not _col_exists(conn, "route_logs", "status"):
+        conn.execute("ALTER TABLE route_logs ADD COLUMN status TEXT DEFAULT 'completed'")
+    if not _col_exists(conn, "route_logs", "source"):
+        conn.execute("ALTER TABLE route_logs ADD COLUMN source TEXT DEFAULT 'manual'")
+
+    # ── checkpoint_logs ─────────────────────────────────────
+    if not _col_exists(conn, "checkpoint_logs", "passed_at"):
+        conn.execute("ALTER TABLE checkpoint_logs ADD COLUMN passed_at TEXT")
+
+    # ── post-migration data fix (required) ──────────────────
+    # All pre-existing trips are manual, completed logs.
+    conn.execute("UPDATE route_logs SET source = 'manual' WHERE source IS NULL OR source = ''")
+    conn.execute("UPDATE route_logs SET status = 'completed' WHERE status IS NULL OR status = ''")
+
+    log.info("MIGRATE  | routes v1→v2 complete (sessions, geofence, source; existing logs → manual/completed)")
+
+ROUTES_MIGRATIONS = {1: _routes_v0_to_v1, 2: _routes_v1_to_v2}
 
 
 # ─────────────────────────────────────────────────────────────
