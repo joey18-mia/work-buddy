@@ -41,7 +41,7 @@
 }
 
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-html,body{margin:0;padding:0;}
+html,body{margin:0;padding:0;overflow-x:hidden;width:100%;}
 body{
   background:var(--bg);color:var(--text-hi);
   font-family:'DM Sans',Arial,sans-serif;font-size:15px;line-height:1.5;
@@ -58,13 +58,22 @@ body{
   position:sticky;top:0;z-index:50;
   display:flex;align-items:flex-end;justify-content:flex-start;
   min-height:52px;
-  padding:calc(env(safe-area-inset-top) + 8px) 16px 8px;
+  padding:calc(env(safe-area-inset-top) + 8px)
+          calc(16px + env(safe-area-inset-right)) 8px
+          calc(16px + env(safe-area-inset-left));
   background:var(--bg-card);border-bottom:1px solid var(--border);
 }
 .m-logo{font-size:16px;font-weight:700;color:var(--accent);line-height:1.1;}
 
-/* ── Main scroll area ── */
-.m-main{padding:16px;max-width:640px;margin:0 auto;}
+/* ── Main scroll area ──
+   Include the device safe-area insets on the sides so cards/toggles never
+   run under the iPhone's rounded corners or off the right edge. */
+.m-main{
+  width:100%;max-width:640px;margin:0 auto;
+  padding:16px;
+  padding-left:calc(16px + env(safe-area-inset-left));
+  padding-right:calc(16px + env(safe-area-inset-right));
+}
 .m-date{font-family:'DM Mono',monospace;font-size:13px;color:var(--text-md);margin-bottom:14px;}
 .m-h1{font-size:22px;font-weight:700;margin:2px 0 14px;color:var(--text-hi);}
 .m-h2{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-md);margin:22px 0 10px;}
@@ -188,6 +197,8 @@ body{
   display:flex;
   background:var(--bg-card);border-top:1px solid var(--border);
   padding-bottom:env(safe-area-inset-bottom);
+  padding-left:env(safe-area-inset-left);
+  padding-right:env(safe-area-inset-right);
 }
 .m-nav-item{
   flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;

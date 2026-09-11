@@ -140,6 +140,7 @@ def m_settings():
 
 @app.route("/m/manifest.webmanifest")
 def m_manifest():
+    # Icons derived from tray_icon.png — used for Add to Home Screen / PWA.
     manifest = {
         "name": "WorkBuddy",
         "short_name": "WorkBuddy",
@@ -150,8 +151,34 @@ def m_manifest():
         "background_color": "#060d18",
         "theme_color": "#0b1525",
         "description": "Live route sessions and schedule for WorkBuddy.",
+        "icons": [
+            {
+                "src": "/static/icons/icon-192.png",
+                "sizes": "192x192",
+                "type": "image/png",
+                "purpose": "any",
+            },
+            {
+                "src": "/static/icons/icon-512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "any",
+            },
+            {
+                "src": "/static/icons/apple-touch-icon.png",
+                "sizes": "180x180",
+                "type": "image/png",
+                "purpose": "any",
+            },
+        ],
     }
     return Response(json.dumps(manifest), mimetype="application/manifest+json")
+
+
+@app.route("/favicon.ico")
+def favicon():
+    """Browsers auto-request /favicon.ico; serve the tray-derived icon."""
+    return app.send_static_file("icons/favicon.ico")
 
 
 # ─────────────────────────────────────────────────────────────
