@@ -67,9 +67,34 @@ See `WORKBUDDY_PROJECT.md` for full architecture, API routes, and database layou
 - Live traffic for configurable highway corridors (TomTom)
 - MLB schedule with highlighted team games
 - Routes CRUD + TomTom ETA + route logging + history
+- Live route sessions + mobile web client (`/m/`)
 - Calendar (week/day) + manual events
 - Spreadsheet schedule import (Excel/CSV)
+- Optional password gate for remote access (Phase 2.5)
 - Windows system tray launcher
+
+---
+
+## 🔐 Remote access (optional)
+
+By default the dashboard trusts your LAN (`WORKBUDDY_AUTH_ENABLED=false`).
+
+To expose it outside home Wi‑Fi (port forward, Cloudflare Tunnel, Tailscale, etc.):
+
+1. Generate a password hash (never store plaintext in `.env`):
+   ```bash
+   python workbuddy_admin.py hash-password
+   ```
+2. Put the printed `WORKBUDDY_PASSWORD_HASH=...` in `.env` and set:
+   ```
+   WORKBUDDY_AUTH_ENABLED=true
+   SESSION_LIFETIME_HOURS=4
+   ```
+3. Restart WorkBuddy. Visit `/login` — sessions expire after 4 hours; failed logins are rate-limited.
+
+**Transport:** Login is not a substitute for HTTPS. Prefer a tunnel/VPN (Tailscale, Cloudflare Tunnel, Caddy) over raw HTTP port-forwarding — browsers often block geolocation on insecure origins.
+
+See `PHASE2.5_REMOTE_ACCESS.md` for the full auth spec.
 
 ---
 

@@ -170,6 +170,28 @@ body{
 }
 .m-input:focus{border-color:var(--accent);}
 .m-row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+/* Equal columns + iOS time-picker vertical centering */
+.m-row2 > .m-input{min-width:0;width:100%;}
+.m-input[type="time"]{
+  min-width:0;
+  height:44px;min-height:44px;
+  padding:0 10px;
+  line-height:44px;
+  text-align:center;
+  -webkit-appearance:none;appearance:none;
+  color-scheme:dark;
+}
+[data-theme="light"] .m-input[type="time"]{color-scheme:light;}
+.m-input[type="time"]::-webkit-date-and-time-value{
+  text-align:center;
+  margin:0;
+  padding:0;
+  line-height:44px;
+  height:44px;
+}
+.m-input[type="time"]::-webkit-calendar-picker-indicator{
+  opacity:.55;margin:0;padding:0;
+}
 .m-toggle-row{display:flex;align-items:center;gap:14px;cursor:pointer;}
 .m-toggle-text{flex:1;}
 .m-toggle-title{font-size:16px;font-weight:600;color:var(--text-hi);}
@@ -254,5 +276,24 @@ body{
 }
 .m-pin-coords{font-family:'DM Mono',monospace;font-size:12px;color:var(--text-md);flex-basis:100%;}
 .m-pin-overlay .m-btn{margin:0;}
+
+/* ── Login (Phase 2.5) ── */
+.m-login-body{padding-bottom:env(safe-area-inset-bottom);}
+.m-login-main{max-width:420px;}
+.m-login-card{margin-top:8px;}
+.m-pw-row{display:flex;gap:8px;align-items:stretch;margin-bottom:12px;}
+.m-pw-row .m-input{flex:1;margin:0;}
+.m-pw-toggle{
+  min-width:64px;min-height:44px;padding:0 12px;
+  border:1px solid var(--border-hi);border-radius:10px;
+  background:var(--bg-hover);color:var(--text-md);
+  font-family:'DM Sans',Arial,sans-serif;font-size:13px;font-weight:600;
+  cursor:pointer;flex-shrink:0;
+}
+.m-pw-toggle:disabled{opacity:.4;cursor:not-allowed;}
+.m-btn-ghost{
+  background:transparent;color:var(--text-md);border-color:var(--border-hi);
+}
+.m-btn-ghost:hover,.m-btn-ghost:active{color:var(--text-hi);border-color:var(--text-md);}
 
 .hidden{display:none !important;}

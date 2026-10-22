@@ -17,15 +17,22 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 from datetime import date, timedelta, datetime
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from flask import (Flask, Response, jsonify, redirect, render_template,
+                   request, stream_with_context, url_for)
 from dotenv import load_dotenv
-from database import (get_calendar_db, get_routes_db, get_settings_db,
-                      init_db, DATABASES_DIR)
 
 load_dotenv()
 
+from database import (get_calendar_db, get_routes_db, get_settings_db,
+                      init_db, DATABASES_DIR)
+import auth as wb_auth
+
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev-fallback-change-me")
+# Cookie max age matches auth lifetime; actual expiry is enforced via auth_at.
+app.permanent_session_lifetime = timedelta(hours=wb_auth.SESSION_LIFETIME_HOURS)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 TOMTOM_KEY      = os.getenv("TOMTOM_API_KEY", "")
@@ -53,8 +60,12 @@ GPS_STALE_SECS = 90  # no fix within this window → report gps_ok=False
 # ─────────────────────────────────────────────────────────────
 
 LOG_PATH     = os.path.join(BASE_DIR, "workbuddy_api.log")
+LOG_HTML_HOURS = 24          # HTML console seeds / retains this window
+LOG_KEEP_DAYS  = 14          # prune non-error file lines older than this
+LOG_ERROR_KEEP_DAYS = 90     # keep ERROR/FAILED lines longer on disk
 _sse_clients = []
 _sse_lock    = threading.Lock()
+_log_prune_lock = threading.Lock()
 
 class _SSEHandler(logging.Handler):
     def emit(self, record):
@@ -77,6 +88,133 @@ api_log.addHandler(_sh)
 api_log.propagate = False
 
 
+def _parse_log_ts(line: str):
+    """Parse leading 'YYYY-MM-DD HH:MM:SS' from a log line → datetime or None."""
+    if len(line) < 19:
+        return None
+    try:
+        return datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _is_error_line(line: str) -> bool:
+    u = line.upper()
+    return "ERROR" in u or "FAILED" in u or "TRACEBACK" in u or "ASSERTIONERROR" in u
+
+
+def _read_log_lines_since(hours: float):
+    """Return log lines with timestamp within the last `hours` (or unparseable kept)."""
+    if not os.path.exists(LOG_PATH):
+        return []
+    cutoff = datetime.now() - timedelta(hours=hours)
+    out = []
+    try:
+        with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                raw = line.rstrip("\n\r")
+                if not raw:
+                    continue
+                ts = _parse_log_ts(raw)
+                if ts is None or ts >= cutoff:
+                    out.append(raw)
+    except OSError:
+        return []
+    return out
+
+
+def prune_log_file(force: bool = False) -> dict:
+    """
+    Trim workbuddy_api.log:
+      • normal lines older than LOG_KEEP_DAYS → dropped
+      • ERROR/FAILED lines kept for LOG_ERROR_KEEP_DAYS
+    Safe to call while the server is running (reopens the FileHandler).
+    """
+    result = {"pruned": False, "before": 0, "after": 0, "removed": 0}
+    if not os.path.exists(LOG_PATH):
+        return result
+    if not _log_prune_lock.acquire(blocking=force):
+        return result
+    try:
+        try:
+            with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            return result
+
+        result["before"] = len(lines)
+        now = datetime.now()
+        keep_cut = now - timedelta(days=LOG_KEEP_DAYS)
+        err_cut  = now - timedelta(days=LOG_ERROR_KEEP_DAYS)
+        kept = []
+        for line in lines:
+            raw = line.rstrip("\n\r")
+            if not raw:
+                continue
+            ts = _parse_log_ts(raw)
+            if ts is None:
+                kept.append(raw)
+                continue
+            if _is_error_line(raw):
+                if ts >= err_cut:
+                    kept.append(raw)
+            elif ts >= keep_cut:
+                kept.append(raw)
+
+        result["after"] = len(kept)
+        result["removed"] = result["before"] - result["after"]
+        if result["removed"] <= 0:
+            return result
+
+        # Rewrite file under the same path; swap FileHandler so Windows releases the handle.
+        global _fh
+        api_log.removeHandler(_fh)
+        try:
+            _fh.close()
+        except Exception:
+            pass
+        try:
+            with open(LOG_PATH, "w", encoding="utf-8", errors="replace") as f:
+                for raw in kept:
+                    f.write(raw + "\n")
+            result["pruned"] = True
+        finally:
+            _fh = logging.FileHandler(LOG_PATH, encoding="utf-8")
+            _fh.setFormatter(logging.Formatter("%(asctime)s  %(message)s", "%Y-%m-%d %H:%M:%S"))
+            api_log.addHandler(_fh)
+        return result
+    finally:
+        _log_prune_lock.release()
+
+
+_log_prune_thread_started = False
+
+def start_log_prune_scheduler():
+    """Run an immediate prune, then once a day. Idempotent."""
+    global _log_prune_thread_started
+    if _log_prune_thread_started:
+        return
+    _log_prune_thread_started = True
+
+    def _loop():
+        while True:
+            try:
+                r = prune_log_file(force=True)
+                if r.get("pruned"):
+                    api_log.info(
+                        f"SERVER   | Log pruned | removed={r['removed']} kept={r['after']} "
+                        f"(keep={LOG_KEEP_DAYS}d, errors={LOG_ERROR_KEEP_DAYS}d)"
+                    )
+            except Exception as e:
+                try:
+                    api_log.info(f"SERVER   | Log prune error: {e}")
+                except Exception:
+                    pass
+            time.sleep(24 * 3600)
+
+    threading.Thread(target=_loop, daemon=True, name="WorkBuddy-LogPrune").start()
+
+
 @app.before_request
 def track_connection():
     ip = request.remote_addr
@@ -88,6 +226,89 @@ def track_connection():
         except Exception:
             pass
         CONNECTIONS[ip] = {"last_seen": time.time(), "hostname": hostname}
+
+
+@app.before_request
+def require_auth():
+    """Phase 2.5 — gate pages + /api/* when WORKBUDDY_AUTH_ENABLED=true."""
+    if not wb_auth.AUTH_ENABLED:
+        return None
+    if wb_auth.is_auth_exempt(request.path):
+        return None
+    if wb_auth.session_valid():
+        wb_auth.touch_active()
+        return None
+    # Stale / missing login cookie
+    wb_auth.clear_auth()
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "unauthorized", "message": "Session expired — log in again"}), 401
+    return redirect(url_for("login", next=request.full_path if request.query_string else request.path))
+
+
+@app.context_processor
+def inject_auth_flags():
+    return {"auth_enabled": wb_auth.AUTH_ENABLED}
+
+
+# ─────────────────────────────────────────────────────────────
+#  AUTH (Phase 2.5)
+# ─────────────────────────────────────────────────────────────
+
+def _safe_next_url(raw: str | None) -> str:
+    """Only allow relative same-origin redirects after login."""
+    if not raw:
+        return ""
+    raw = raw.strip()
+    if not raw.startswith("/") or raw.startswith("//"):
+        return ""
+    return raw
+
+
+def _default_post_login_url() -> str:
+    ua = (request.headers.get("User-Agent") or "").lower()
+    mobile_hints = ("iphone", "android", "ipad", "mobile")
+    if any(h in ua for h in mobile_hints):
+        return "/m/"
+    return "/"
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    next_url = _safe_next_url(request.values.get("next")) or _default_post_login_url()
+
+    # Already signed in → bounce to destination
+    if not wb_auth.AUTH_ENABLED or wb_auth.session_valid():
+        return redirect(next_url)
+
+    error = None
+    if request.method == "POST":
+        ip = request.remote_addr
+        if wb_auth.login_rate_limited(ip):
+            return render_template(
+                "login.html",
+                error="Too many attempts. Try again later.",
+                next=next_url,
+                rate_limited=True,
+            ), 429
+        password = request.form.get("password", "")
+        if wb_auth.verify_password(password):
+            wb_auth.mark_authenticated()
+            wb_auth.clear_login_failures(ip)
+            api_log.info(f"Auth: login ok from {ip}")
+            return redirect(next_url)
+        wb_auth.record_login_failure(ip)
+        api_log.info(f"Auth: login failed from {ip}")
+        error = "Invalid password"
+
+    return render_template("login.html", error=error, next=next_url, rate_limited=False)
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    wb_auth.clear_auth()
+    if wb_auth.AUTH_ENABLED:
+        return redirect(url_for("login"))
+    return redirect("/")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -188,23 +409,33 @@ def favicon():
 @app.route("/api/console/stream")
 def console_stream():
     def generate():
-        cq = queue.Queue(maxsize=200)
+        cq = queue.Queue(maxsize=500)
         with _sse_lock: _sse_clients.append(cq)
         try:
-            if os.path.exists(LOG_PATH):
-                with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
-                    for line in f.readlines()[-60:]:
-                        yield f"data: {line.rstrip()}\n\n"
+            # Pad first event so proxies/waitress flush the stream promptly
+            yield ": connected\n\n"
+            # Seed HTML console with last 24h only (not the full on-disk log)
+            for line in _read_log_lines_since(LOG_HTML_HOURS):
+                yield f"data: {line}\n\n"
             while True:
-                try:    yield f"data: {cq.get(timeout=25)}\n\n"
-                except queue.Empty: yield ": keepalive\n\n"
+                try:
+                    yield f"data: {cq.get(timeout=20)}\n\n"
+                except queue.Empty:
+                    # Comment frame — keeps intermediaries from idling out the socket
+                    yield f": ping {int(time.time())}\n\n"
         except GeneratorExit:
             pass
         finally:
             with _sse_lock:
                 if cq in _sse_clients: _sse_clients.remove(cq)
-    return Response(stream_with_context(generate()), mimetype="text/event-stream",
-                    headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 @app.route("/api/console/log", methods=["POST"])
 def console_log():
@@ -1321,7 +1552,10 @@ def admin_status():
 def start_server(port: int = 5000):
     try:
         from waitress import create_server
-        srv = create_server(app, host="0.0.0.0", port=port, threads=8)
+        srv = create_server(
+            app, host="0.0.0.0", port=port, threads=8,
+            channel_timeout=3600, asyncore_use_poll=True,
+        )
         api_log.info(f"SERVER   | Waitress on 0.0.0.0:{port} | PID={os.getpid()}")
         srv.run()
     except ImportError:
@@ -1330,6 +1564,7 @@ def start_server(port: int = 5000):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     init_db()
+    start_log_prune_scheduler()
     with open(PID_FILE,"w") as f: f.write(str(os.getpid()))
     with open(UPTIME_FILE,"w") as f: f.write(str(time.time()))
     api_log.info(f"SERVER   | WorkBuddy started | PID={os.getpid()}")

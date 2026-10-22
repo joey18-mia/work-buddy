@@ -46,4 +46,8 @@
 <button class="m-btn" onclick="saveMobileSettings()">Save Settings</button>
 <div id="m-settings-msg" class="m-msg"></div>
 
+{% if auth_enabled %}
+<button class="m-btn m-btn-ghost" type="button" onclick="location.href='/logout'">Log out</button>
+{% endif %}
+
 {% endblock %}

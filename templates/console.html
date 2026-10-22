@@ -263,9 +263,11 @@ const labelEl   = document.getElementById('status-label');
 let lineCount    = 0;
 let activeFilter = 'ALL';
 let es           = null;
-let reconnectMs  = 2000;
+let reconnectMs  = 1500;
+let connectTimer = null;
+let sawHistory   = false;
+const HTML_KEEP_MS = 24 * 60 * 60 * 1000; // match server LOG_HTML_HOURS
 
-// ── Type detection ──────────────────────────
 function detectType(msg) {
   const upper = msg.toUpperCase();
   if (upper.includes('ERROR') || upper.includes('FAILED'))   return 'ERROR';
@@ -277,29 +279,52 @@ function detectType(msg) {
   if (upper.includes('EVENT'))    return 'EVENT';
   if (upper.includes('MIGRATE') || upper.includes('DATABASE')) return 'MIGRATE';
   if (upper.includes('LIST'))     return 'LIST';
+  if (upper.includes('AUTH'))     return 'SERVER';
   return 'OTHER';
 }
 
-// ── Parse a raw log line ─────────────────────
-// Format: "2026-05-04 07:00:01  TRAFFIC  | TomTom x4 ..."
 function parseLine(raw) {
-  // Timestamp is first 19 chars
   const ts  = raw.length >= 19 ? raw.slice(0, 19) : '';
   const rest = raw.length > 21 ? raw.slice(21) : raw;
   const type = detectType(rest);
   return { ts, rest, type };
 }
 
-// ── Append a line to the console ─────────────
+function lineEpoch(ts) {
+  // ts is "YYYY-MM-DD HH:MM:SS" local server time
+  if (!ts || ts.length < 19) return Date.now();
+  const p = ts.split(/[-: ]/).map(Number);
+  return new Date(p[0], (p[1] || 1) - 1, p[2] || 1, p[3] || 0, p[4] || 0, p[5] || 0).getTime();
+}
+
+function pruneOldLines() {
+  const cutoff = Date.now() - HTML_KEEP_MS;
+  let removed = 0;
+  document.querySelectorAll('.log-line').forEach(line => {
+    const tsEl = line.querySelector('.log-ts');
+    const ts = tsEl ? tsEl.textContent : '';
+    if (lineEpoch(ts) < cutoff) {
+      line.remove();
+      removed++;
+    }
+  });
+  if (removed) {
+    lineCount = Math.max(0, lineCount - removed);
+    counterEl.textContent = `${lineCount} line${lineCount !== 1 ? 's' : ''}`;
+  }
+}
+
 function appendLine(raw, isNew = false) {
-  if (emptyEl) { emptyEl.remove(); }
+  if (emptyEl && emptyEl.parentNode) emptyEl.remove();
   const { ts, rest, type } = parseLine(raw);
+  // Drop anything already older than 24h (shouldn't happen often)
+  if (lineEpoch(ts) < Date.now() - HTML_KEEP_MS) return;
+
   const hidden = activeFilter !== 'ALL' && !type.startsWith(activeFilter);
 
   const div = document.createElement('div');
   div.className = `log-line type-${type.toLowerCase()}${hidden ? ' hidden' : ''}${isNew ? ' new' : ''}`;
   div.dataset.type = type;
-
   div.innerHTML = `<span class="log-ts">${ts}</span><span class="log-msg">${escHtml(rest)}</span>`;
   wrap.appendChild(div);
 
@@ -309,13 +334,14 @@ function appendLine(raw, isNew = false) {
   if (isNew && document.getElementById('autoscroll').checked) {
     div.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }
+  // Opportunistic trim so a long-open tab stays within 24h
+  if (lineCount % 50 === 0) pruneOldLines();
 }
 
 function escHtml(str) {
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// ── Filter ───────────────────────────────────
 function setFilter(type) {
   activeFilter = type;
   document.querySelectorAll('.filter-btn').forEach(btn => {
@@ -328,35 +354,11 @@ function setFilter(type) {
   });
 }
 
-// ── Clear ────────────────────────────────────
 function clearConsole() {
   wrap.innerHTML = '';
   lineCount = 0;
   counterEl.textContent = '0 lines';
-}
-
-// ── SSE connection ───────────────────────────
-function connect() {
-  setStatus('reconnecting', 'Connecting…');
-
-  es = new EventSource('/api/console/stream');
-
-  es.onopen = () => {
-    setStatus('connected', 'Live');
-    reconnectMs = 2000;
-  };
-
-  es.onmessage = (e) => {
-    if (e.data.startsWith(':')) return;  // keepalive comment
-    appendLine(e.data, true);
-  };
-
-  es.onerror = () => {
-    setStatus('reconnecting', `Reconnecting in ${reconnectMs / 1000}s…`);
-    es.close();
-    setTimeout(connect, reconnectMs);
-    reconnectMs = Math.min(reconnectMs * 1.5, 15000);
-  };
+  sawHistory = false;
 }
 
 function setStatus(cls, label) {
@@ -365,8 +367,78 @@ function setStatus(cls, label) {
   labelEl.textContent = label;
 }
 
-// Start
+function scheduleReconnect() {
+  if (connectTimer) clearTimeout(connectTimer);
+  setStatus('reconnecting', `Reconnecting in ${Math.round(reconnectMs / 1000)}s…`);
+  connectTimer = setTimeout(connect, reconnectMs);
+  reconnectMs = Math.min(reconnectMs * 1.5, 12000);
+}
+
+async function ensureAuthed() {
+  try {
+    const r = await fetch('/api/admin/status', { credentials: 'same-origin', cache: 'no-store' });
+    if (r.status === 401) {
+      const next = encodeURIComponent('/console');
+      location.href = '/login?next=' + next;
+      return false;
+    }
+    return r.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function connect() {
+  if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+  if (es) { try { es.close(); } catch (e) {} es = null; }
+
+  setStatus('reconnecting', 'Connecting…');
+
+  const ok = await ensureAuthed();
+  if (!ok) {
+    scheduleReconnect();
+    return;
+  }
+
+  // Fresh stream after reconnect — keep existing lines, mark subsequent as new
+  es = new EventSource('/api/console/stream');
+
+  es.onopen = () => {
+    setStatus('connected', 'Live');
+    reconnectMs = 1500;
+  };
+
+  es.onmessage = (e) => {
+    if (!e.data || e.data.startsWith(':')) return;
+    // First burst after open is history (not "new"); after that flash new lines
+    const isNew = sawHistory;
+    if (!sawHistory) {
+      // Treat first message batch as history until a short quiet gap
+      appendLine(e.data, false);
+      clearTimeout(connect._histTimer);
+      connect._histTimer = setTimeout(() => { sawHistory = true; }, 250);
+      return;
+    }
+    appendLine(e.data, isNew);
+  };
+
+  es.onerror = () => {
+    try { es.close(); } catch (e) {}
+    es = null;
+    scheduleReconnect();
+  };
+}
+
+// Reconnect when tab becomes visible again (e.g. after tray restart)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && (!es || es.readyState === EventSource.CLOSED)) {
+    reconnectMs = 500;
+    connect();
+  }
+});
+
 connect();
+setInterval(pruneOldLines, 5 * 60 * 1000); // drop DOM lines older than 24h
 </script>
 </body>
 </html>

@@ -26,7 +26,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 async function api(url, method = "GET", body) {
-  const opt = { method, headers: {} };
+  const opt = { method, headers: {}, credentials: "same-origin" };
   if (body !== undefined) {
     opt.headers["Content-Type"] = "application/json";
     opt.body = JSON.stringify(body);
@@ -35,6 +35,17 @@ async function api(url, method = "GET", body) {
     const r = await fetch(url, opt);
     let data = null;
     try { data = await r.json(); } catch (e) { /* no body */ }
+    // Phase 2.5 — auth cookie expired mid-drive or mid-browse
+    if (r.status === 401) {
+      const msg = (data && data.message) || "Session expired — log in again";
+      const banner = document.getElementById("m-gps-banner");
+      if (banner) {
+        banner.textContent = msg;
+        banner.classList.remove("hidden");
+      }
+      const next = encodeURIComponent(location.pathname + location.search);
+      setTimeout(() => { location.href = "/login?next=" + next; }, 600);
+    }
     return { ok: r.ok, status: r.status, data };
   } catch (e) {
     return { ok: false, status: 0, data: null };

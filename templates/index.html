@@ -417,6 +417,11 @@
       <label>Traffic Highways Displayed</label>
       <p class="field-hint">Toggle which highways appear in the Traffic panel.</p>
       <div id="highway-toggles" class="toggle-list"></div>
+      {% if auth_enabled %}
+      <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border,#162235);">
+        <button type="button" class="btn-sm" onclick="location.href='/logout'">Log out</button>
+      </div>
+      {% endif %}
     </div>
   </div>
 </div>

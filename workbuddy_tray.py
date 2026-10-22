@@ -7,18 +7,19 @@ System tray icon with right-click menu:
   • Open Dashboard
   • Open Console
   • List Connections  →  logs to console page
-  • Restart Server
+  • Restart Server    →  full process respawn (reloads .env + code)
   • Stop Server       →  removes icon, exits
 
 Tray icon:
-  Looks for  workbuddy/tray_icon.png  first.
-  Falls back to a generated teal circle with ⚾ if not found.
+  Looks for  tray_icon.png / static/icons/tray_icon.png  first.
+  Falls back to a generated teal circle if not found.
 """
 
 import os
 import sys
 import time
 import socket
+import subprocess
 import threading
 import webbrowser
 import requests as _req
@@ -41,24 +42,24 @@ BASE_URL = f"http://localhost:{PORT}"
 # ─────────────────────────────────────────────────────────────
 
 def _load_icon():
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw
 
-    custom = os.path.join(BASE_DIR, "tray_icon.png")
-    if os.path.exists(custom):
-        try:
-            img = Image.open(custom).convert("RGBA")
-            img = img.resize((64, 64), Image.LANCZOS)
-            return img
-        except Exception:
-            pass  # Fall through to generated icon
+    for name in ("tray_icon.png", os.path.join("static", "icons", "tray_icon.png")):
+        custom = os.path.join(BASE_DIR, name)
+        if os.path.exists(custom):
+            try:
+                img = Image.open(custom).convert("RGBA")
+                img = img.resize((64, 64), Image.LANCZOS)
+                return img
+            except Exception:
+                pass
 
-    # Generated fallback: teal circle with ⚾
+    # Generated fallback: teal circle
     size  = 64
     img   = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw  = ImageDraw.Draw(img)
     teal  = (0, 163, 224, 255)
     draw.ellipse([2, 2, size - 2, size - 2], fill=teal)
-    # Draw a simple baseball-stitch "B" shape
     white = (255, 255, 255, 255)
     cx, cy, r = size // 2, size // 2, size // 4
     draw.arc([cx - r, cy - r, cx + r, cy + r], start=30,  end=150, fill=white, width=3)
@@ -76,27 +77,45 @@ _server_lock   = threading.Lock()
 
 
 def _run_flask():
-    """Target for the server thread.  Imports app here to avoid circular issues."""
+    """Target for the server thread. Always uses a stoppable WSGI server."""
     global _server_obj
     from app import app, api_log
     try:
         from waitress import create_server
+        # channel_timeout must be high — EventSource clients never send
+        # follow-up request body bytes; Waitress would otherwise drop SSE ~2min.
+        srv = create_server(
+            app, host="0.0.0.0", port=PORT, threads=8,
+            channel_timeout=3600, asyncore_use_poll=True,
+        )
         with _server_lock:
-            _server_obj = create_server(app, host="0.0.0.0", port=PORT, threads=8)
+            _server_obj = srv
         api_log.info(f"SERVER   | Waitress started on port {PORT} | PID={os.getpid()}")
-        _server_obj.run()   # blocks until _server_obj.close() is called
+        srv.run()  # blocks until srv.close()
         api_log.info("SERVER   | Waitress stopped")
     except ImportError:
-        api_log.info(f"SERVER   | Flask dev server on port {PORT}")
-        app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True, use_reloader=False)
+        # Stoppable fallback — app.run() cannot be stopped by the tray.
+        from werkzeug.serving import make_server
+        srv = make_server("0.0.0.0", PORT, app, threaded=True)
+        with _server_lock:
+            _server_obj = srv
+        api_log.info(f"SERVER   | Werkzeug server on port {PORT} | PID={os.getpid()}")
+        api_log.info("SERVER   | Tip: pip install waitress  (preferred production server)")
+        srv.serve_forever()
+        api_log.info("SERVER   | Werkzeug server stopped")
+    except OSError as e:
+        api_log.info(f"SERVER   | Failed to bind port {PORT}: {e}")
+    finally:
+        with _server_lock:
+            if _server_obj is not None:
+                _server_obj = None
 
 
 def _start_server_thread():
     global _server_thread
     _server_thread = threading.Thread(target=_run_flask, daemon=True, name="WorkBuddy-Flask")
     _server_thread.start()
-    # Give Flask a moment to bind before opening browser
-    _wait_for_server()
+    return _wait_for_server()
 
 
 def _wait_for_server(timeout: int = 10):
@@ -111,15 +130,46 @@ def _wait_for_server(timeout: int = 10):
     return False
 
 
+def _port_in_use() -> bool:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", PORT)) == 0
+    finally:
+        s.close()
+
+
+def _wait_for_port_free(timeout: float = 8.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _port_in_use():
+            return True
+        time.sleep(0.2)
+    return not _port_in_use()
+
+
 def _stop_server():
-    global _server_obj
+    """Close the WSGI server and wait for the thread / port to release."""
+    global _server_obj, _server_thread
     with _server_lock:
-        if _server_obj is not None:
-            try:
-                _server_obj.close()
-            except Exception:
-                pass
-            _server_obj = None
+        obj = _server_obj
+        _server_obj = None
+    if obj is not None:
+        try:
+            # Waitress: close(); Werkzeug: shutdown() (+ server_close)
+            if hasattr(obj, "close"):
+                obj.close()
+            if hasattr(obj, "shutdown"):
+                obj.shutdown()
+            if hasattr(obj, "server_close"):
+                obj.server_close()
+        except Exception:
+            pass
+    t = _server_thread
+    if t is not None and t.is_alive():
+        t.join(timeout=8)
+    _server_thread = None
+    _wait_for_port_free()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -149,26 +199,58 @@ def _list_connections(icon, item):
         if not conns:
             _req.post(f"{BASE_URL}/api/console/log",
                       json={"message": "LIST     | No active connections in last 30 min"}, timeout=3)
-        # Open console so user sees the output
         webbrowser.open(f"{BASE_URL}/console")
     except Exception as e:
         print(f"[Tray] List connections error: {e}")
 
 
 def _restart_server(icon, item):
-    from app import api_log
-    api_log.info("SERVER   | Restart requested via tray")
+    """
+    True restart: stop the listener, spawn a fresh process in a new CMD
+    window (so live print logs come back), then exit this one.
+    """
+    try:
+        from app import api_log
+        api_log.info("SERVER   | Restart requested via tray — respawning process")
+    except Exception:
+        print("[WorkBuddy] Restart requested via tray — respawning process")
+
     _stop_server()
-    time.sleep(1)
-    _start_server_thread()
-    api_log.info("SERVER   | Restart complete")
+
+    script = os.path.abspath(__file__)
+    # Prefer the .bat launcher so the new window title/cwd match a normal start.
+    bat = os.path.join(BASE_DIR, "workbuddy.bat")
+    if sys.platform == "win32" and os.path.isfile(bat):
+        args = ["cmd.exe", "/k", bat]
+    else:
+        args = [sys.executable, script] + sys.argv[1:]
+
+    kwargs = {"cwd": BASE_DIR, "close_fds": True}
+    if sys.platform == "win32":
+        # New visible console (NOT DETACHED_PROCESS — that hid the CMD log).
+        kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+
+    try:
+        subprocess.Popen(args, **kwargs)
+    except Exception as e:
+        print(f"[WorkBuddy] Failed to respawn: {e}")
+        if not _start_server_thread():
+            print("[WorkBuddy] Server failed to come back after failed respawn")
+        return
+
+    icon.stop()
 
 
 def _stop_and_exit(icon, item):
-    from app import api_log
-    api_log.info("SERVER   | Stop requested via tray — shutting down")
+    try:
+        from app import api_log
+        api_log.info("SERVER   | Stop requested via tray — shutting down")
+    except Exception:
+        pass
     _stop_server()
-    icon.stop()     # removes tray icon, returns control to main thread
+    icon.stop()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -176,30 +258,27 @@ def _stop_and_exit(icon, item):
 # ─────────────────────────────────────────────────────────────
 
 def main():
-    # Initialise DB before anything starts
     from database import init_db
-    import app as _app_module
+    import app as _app_module  # noqa: F401 — load app + logging
     init_db()
+    _app_module.start_log_prune_scheduler()
 
-    # Write PID / uptime
     with open(os.path.join(BASE_DIR, "workbuddy.pid"), "w") as f:
         f.write(str(os.getpid()))
     with open(os.path.join(BASE_DIR, "workbuddy.uptime"), "w") as f:
         f.write(str(time.time()))
 
-    # Start Flask in background thread
     print(f"[WorkBuddy] Starting server on port {PORT}...")
-    _start_server_thread()
-    print(f"[WorkBuddy] Running → {BASE_URL}")
-    print(f"[WorkBuddy] Console  → {BASE_URL}/console")
+    if not _start_server_thread():
+        print(f"[WorkBuddy] WARNING: server did not respond on {BASE_URL}")
+    else:
+        print(f"[WorkBuddy] Running → {BASE_URL}")
+        print(f"[WorkBuddy] Console  → {BASE_URL}/console")
     print("[WorkBuddy] Tray icon active. Right-click to manage.")
 
-    # Build tray icon (pystray must run on main thread on Windows)
     try:
         import pystray
         from pystray import MenuItem as Item, Menu
-
-        icon_image = _load_icon()
 
         menu = Menu(
             Item("⚾ Open Dashboard",      _open_dashboard,    default=True),
@@ -213,15 +292,15 @@ def main():
 
         tray = pystray.Icon(
             name="WorkBuddy",
-            icon=icon_image,
+            icon=_load_icon(),
             title="WorkBuddy",
             menu=menu,
         )
-        tray.run()   # blocks main thread; returns after icon.stop() is called
+        tray.run()
 
     except ImportError:
         print("[WorkBuddy] pystray not installed — running without tray icon.")
-        print(f"           Install with:  pip install pystray")
+        print("           Install with:  pip install pystray")
         print("           Server is running. Press Ctrl+C to stop.")
         try:
             while True:

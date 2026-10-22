@@ -171,14 +171,14 @@ Document in README when Phase 2.5 ships; not implemented in code.
 
 ## Acceptance criteria
 
-- [ ] With `WORKBUDDY_AUTH_ENABLED=true`, unauthenticated `/` and `/api/routes` return redirect / 401.  
-- [ ] Correct password → session cookie → full app access (desktop + `/m/`).  
-- [ ] Wrong password → error, no session.  
-- [ ] After 4 hours from login, next request forces re-login.  
-- [ ] Logout clears session immediately.  
-- [ ] 5+ failed logins from same IP within 5 min → 429.  
-- [ ] `WORKBUDDY_AUTH_ENABLED=false` → zero behavior change from pre-2.5.  
-- [ ] Active **route session** (GPS): if auth expires mid-drive, location POSTs get 401 — mobile should show “Session expired — log in again” (mobile.js follow-up).
+- [x] With `WORKBUDDY_AUTH_ENABLED=true`, unauthenticated `/` and `/api/routes` return redirect / 401.  
+- [x] Correct password → session cookie → full app access (desktop + `/m/`).  
+- [x] Wrong password → error, no session.  
+- [x] After 4 hours from login, next request forces re-login.  
+- [x] Logout clears session immediately.  
+- [x] 5+ failed logins from same IP within 5 min → 429.  
+- [x] `WORKBUDDY_AUTH_ENABLED=false` → zero behavior change from pre-2.5.  
+- [x] Active **route session** (GPS): if auth expires mid-drive, location POSTs get 401 — mobile should show “Session expired — log in again” (mobile.js follow-up).
 
 ---
 

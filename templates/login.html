@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark-blue">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0b1525">
+<title>Sign in · WorkBuddy</title>
+<link rel="icon" href="/static/icons/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/mobile.css">
+</head>
+<body class="m-login-body">
+
+<header class="m-topbar">
+  <span class="m-logo">🌴 WorkBuddy</span>
+</header>
+
+<main class="m-main m-login-main">
+  <h1 class="m-h1">Sign in</h1>
+  <p class="m-sub">Enter the household password to open the dashboard.</p>
+
+  <form class="m-card m-login-card" method="post" action="/login" autocomplete="current-password">
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+
+    <label class="m-field-label" for="password">Password</label>
+    <div class="m-pw-row">
+      <input class="m-input" id="password" name="password" type="password"
+             required autofocus {% if rate_limited %}disabled{% endif %}
+             placeholder="Password" autocomplete="current-password">
+      <button type="button" class="m-pw-toggle" id="pw-toggle" aria-label="Show password"
+              {% if rate_limited %}disabled{% endif %}>Show</button>
+    </div>
+
+    {% if error %}
+    <div class="m-banner m-banner-warn" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <button class="m-btn" type="submit" {% if rate_limited %}disabled{% endif %}>Sign in</button>
+  </form>
+</main>
+
+<script>
+(function () {
+  const input = document.getElementById("password");
+  const btn = document.getElementById("pw-toggle");
+  if (!input || !btn) return;
+  btn.addEventListener("click", function () {
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    btn.textContent = show ? "Hide" : "Show";
+    btn.setAttribute("aria-label", show ? "Hide password" : "Show password");
+  });
+})();
+</script>
+</body>
+</html>

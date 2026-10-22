@@ -1244,9 +1244,14 @@ function setupModalOverlayClose() {
 //  HELPERS
 // ─────────────────────────────────────────────
 async function fetchJSON(url, method='GET', body=null) {
-  const opts={method,headers:body?{'Content-Type':'application/json'}:{}};
+  const opts={method,headers:body?{'Content-Type':'application/json'}:{},credentials:'same-origin'};
   if (body) opts.body=JSON.stringify(body);
   const r=await fetch(url,opts);
+  if (r.status===401){
+    const next=encodeURIComponent(location.pathname+location.search);
+    location.href='/login?next='+next;
+    throw new Error('Session expired — log in again');
+  }
   if (!r.ok){const err=await r.json().catch(()=>({message:r.statusText}));throw new Error(err.message||r.statusText);}
   return r.json();
 }
