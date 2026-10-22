@@ -707,47 +707,266 @@ def delete_route(route_id):
     db.commit(); db.close()
     return jsonify({"deleted":route_id})
 
+def _tomtom_eta_for_route(row):
+    """Live TomTom ETA for a routes row. Returns dict or raises."""
+    if not TOMTOM_KEY:
+        raise RuntimeError("no_key")
+    import json as _j
+
+    def geocode(addr):
+        r = requests.get(
+            f"https://api.tomtom.com/search/2/geocode/{requests.utils.quote(addr)}.json",
+            params={"key": TOMTOM_KEY, "countrySet": "US", "limit": 1}, timeout=8)
+        r.raise_for_status()
+        pos = r.json()["results"][0]["position"]
+        return f"{pos['lat']},{pos['lon']}"
+
+    wp = row["waypoints"] or ""
+    if wp.startswith("{") or wp.startswith("["):
+        pts = _j.loads(wp)
+        if isinstance(pts, dict):
+            pts = pts.get("points", [])
+        rp = ":".join(f"{p['lat']},{p['lng']}" for p in pts)
+    else:
+        oc = geocode(row["origin"])
+        dc = geocode(row["destination"])
+        ws = ""
+        if wp:
+            wps = [w.strip() for w in wp.split("|") if w.strip()]
+            if wps:
+                ws = ":".join(geocode(w) for w in wps) + ":"
+        rp = f"{oc}:{ws}{dc}"
+    r2 = requests.get(
+        f"https://api.tomtom.com/routing/1/calculateRoute/{rp}/json",
+        params={"key": TOMTOM_KEY, "traffic": "true", "travelMode": "car"}, timeout=10)
+    r2.raise_for_status()
+    s = r2.json()["routes"][0]["summary"]
+    return {
+        "travel_mins": round(s["travelTimeInSeconds"] / 60, 1),
+        "delay_mins": round(s.get("trafficDelayInSeconds", 0) / 60, 1),
+        "length_km": round(s["lengthInMeters"] / 1000, 1),
+    }
+
+
+def _avg(nums):
+    nums = [float(n) for n in nums if n is not None]
+    return round(sum(nums) / len(nums), 1) if nums else None
+
+
+def _median(nums):
+    nums = sorted(float(n) for n in nums if n is not None)
+    if not nums:
+        return None
+    mid = len(nums) // 2
+    if len(nums) % 2:
+        return round(nums[mid], 1)
+    return round((nums[mid - 1] + nums[mid]) / 2, 1)
+
+
+# Ignore tiny test drives when building personal ETA models.
+MIN_PREDICT_TRIP_MINS = 10.0
+
+
+def _personal_eta_model(route_id, target: date):
+    """
+    Build a personal commute estimate from history:
+      • same weekday average
+      • same ISO week-of-year (prior seasons)
+      • recent trips
+      • avg (actual − estimated) bias when both exist
+    """
+    db = get_routes_db()
+    rows = db.execute(
+        "SELECT log_date, estimated_mins, actual_mins FROM route_logs "
+        "WHERE route_id=? AND actual_mins IS NOT NULL "
+        "AND COALESCE(status,'completed') NOT IN ('active','cancelled') "
+        "AND actual_mins >= ? "
+        "ORDER BY log_date DESC",
+        (route_id, MIN_PREDICT_TRIP_MINS)).fetchall()
+    db.close()
+
+    trips = []
+    for r in rows:
+        try:
+            d = date.fromisoformat(str(r["log_date"])[:10])
+        except ValueError:
+            continue
+        trips.append({
+            "date": d,
+            "actual": float(r["actual_mins"]),
+            "estimated": float(r["estimated_mins"]) if r["estimated_mins"] is not None else None,
+            "weekday": d.weekday(),
+            "woy": d.isocalendar()[1],
+        })
+
+    target_dow = target.weekday()
+    target_woy = target.isocalendar()[1]
+    dow_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    same_dow = [t["actual"] for t in trips if t["weekday"] == target_dow]
+    # Prefer prior-year same week-of-year; fall back to any year if sparse.
+    same_woy_prior = [t["actual"] for t in trips
+                      if t["woy"] == target_woy and t["date"].year < target.year]
+    same_woy = same_woy_prior or [t["actual"] for t in trips if t["woy"] == target_woy]
+    recent = [t["actual"] for t in trips[:8]]
+
+    bias_vals = []
+    for t in trips:
+        if t["estimated"] is not None:
+            bias_vals.append(t["actual"] - t["estimated"])
+
+    buckets = {
+        "same_weekday": {
+            "n": len(same_dow),
+            "avg": _avg(same_dow),
+            "median": _median(same_dow),
+        },
+        "same_week_of_year": {
+            "n": len(same_woy),
+            "avg": _avg(same_woy),
+            "median": _median(same_woy),
+            "prior_year_only": bool(same_woy_prior),
+        },
+        "recent": {
+            "n": len(recent),
+            "avg": _avg(recent),
+            "median": _median(recent),
+        },
+        "est_vs_actual_bias": {
+            "n": len(bias_vals),
+            "avg_delta": _avg(bias_vals),  # positive = you run longer than estimate
+        },
+    }
+
+    # Weighted personal blend (only buckets with enough samples)
+    parts = []
+    if buckets["same_weekday"]["n"] >= 2 and buckets["same_weekday"]["avg"] is not None:
+        parts.append((0.45, buckets["same_weekday"]["avg"]))
+    if buckets["same_week_of_year"]["n"] >= 2 and buckets["same_week_of_year"]["avg"] is not None:
+        parts.append((0.25, buckets["same_week_of_year"]["avg"]))
+    if buckets["recent"]["n"] >= 2 and buckets["recent"]["avg"] is not None:
+        parts.append((0.30, buckets["recent"]["avg"]))
+    elif buckets["recent"]["n"] == 1 and buckets["recent"]["avg"] is not None:
+        parts.append((0.30, buckets["recent"]["avg"]))
+
+    personal = None
+    if parts:
+        wsum = sum(w for w, _ in parts)
+        personal = round(sum(w * v for w, v in parts) / wsum, 1)
+
+    n_hist = len(trips)
+    if n_hist >= 12 and buckets["same_weekday"]["n"] >= 4:
+        confidence = "high"
+    elif n_hist >= 5:
+        confidence = "medium"
+    elif n_hist >= 1:
+        confidence = "low"
+    else:
+        confidence = "none"
+
+    return {
+        "target_date": target.isoformat(),
+        "weekday": dow_names[target_dow],
+        "week_of_year": target_woy,
+        "personal_mins": personal,
+        "confidence": confidence,
+        "trip_count": n_hist,
+        "samples": buckets,
+    }
+
+
 @app.route("/api/routes/<int:route_id>/eta")
 def route_eta(route_id):
-    if not TOMTOM_KEY: return jsonify({"error":"no_key"}), 503
-    db  = get_routes_db()
+    if not TOMTOM_KEY:
+        return jsonify({"error": "no_key"}), 503
+    db = get_routes_db()
     row = db.execute("SELECT * FROM routes WHERE id=?", (route_id,)).fetchone()
     db.close()
-    if not row: return jsonify({"error":"Route not found"}), 404
+    if not row:
+        return jsonify({"error": "Route not found"}), 404
     try:
-        import json as _j
-        def geocode(addr):
-            r = requests.get(
-                f"https://api.tomtom.com/search/2/geocode/{requests.utils.quote(addr)}.json",
-                params={"key":TOMTOM_KEY,"countrySet":"US","limit":1}, timeout=8)
-            r.raise_for_status()
-            pos = r.json()["results"][0]["position"]
-            return f"{pos['lat']},{pos['lon']}"
-        wp = row["waypoints"] or ""
-        if wp.startswith("{") or wp.startswith("["):
-            pts = _j.loads(wp)
-            if isinstance(pts,dict): pts = pts.get("points",[])
-            rp = ":".join(f"{p['lat']},{p['lng']}" for p in pts)
-        else:
-            oc = geocode(row["origin"]); dc = geocode(row["destination"])
-            ws = ""
-            if wp:
-                wps=[w.strip() for w in wp.split("|") if w.strip()]
-                if wps: ws=":".join(geocode(w) for w in wps)+":"
-            rp = f"{oc}:{ws}{dc}"
-        r2 = requests.get(
-            f"https://api.tomtom.com/routing/1/calculateRoute/{rp}/json",
-            params={"key":TOMTOM_KEY,"traffic":"true","travelMode":"car"}, timeout=10)
-        r2.raise_for_status()
-        s = r2.json()["routes"][0]["summary"]
-        tm = round(s["travelTimeInSeconds"]/60, 1)
-        dm = round(s.get("trafficDelayInSeconds",0)/60, 1)
-        api_log.info(f"ROUTE_ETA| TomTom | {request.remote_addr} | route_id={route_id} → {tm} min")
-        return jsonify({"route_id":route_id,"route_name":row["name"],"travel_mins":tm,
-                        "delay_mins":dm,"length_km":round(s["lengthInMeters"]/1000,1)})
+        eta = _tomtom_eta_for_route(row)
+        api_log.info(
+            f"ROUTE_ETA| TomTom | {request.remote_addr} | route_id={route_id} → {eta['travel_mins']} min")
+        return jsonify({
+            "route_id": route_id,
+            "route_name": row["name"],
+            **eta,
+        })
     except Exception as e:
         api_log.error(f"ROUTE_ETA| Error: {e}")
-        return jsonify({"error":str(e)}), 502
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/routes/<int:route_id>/predict")
+def route_predict(route_id):
+    """
+    Personal arrival estimate from history + optional live TomTom.
+    Query: ?date=YYYY-MM-DD (default today)  &live=0 to skip TomTom.
+    """
+    db = get_routes_db()
+    row = db.execute("SELECT * FROM routes WHERE id=?", (route_id,)).fetchone()
+    db.close()
+    if not row:
+        return jsonify({"error": "Route not found"}), 404
+
+    raw_date = (request.args.get("date") or "").strip()
+    try:
+        target = date.fromisoformat(raw_date) if raw_date else date.today()
+    except ValueError:
+        return jsonify({"error": "Invalid date — use YYYY-MM-DD"}), 400
+
+    model = _personal_eta_model(route_id, target)
+    want_live = request.args.get("live", "1") != "0"
+
+    tomtom = None
+    if want_live and TOMTOM_KEY:
+        try:
+            tomtom = _tomtom_eta_for_route(row)
+        except Exception as e:
+            api_log.info(f"ROUTE_PRED| TomTom skipped: {e}")
+
+    bias = model["samples"]["est_vs_actual_bias"]["avg_delta"]
+    adjusted_live = None
+    if tomtom and bias is not None:
+        adjusted_live = round(tomtom["travel_mins"] + bias, 1)
+
+    personal = model["personal_mins"]
+    blended = None
+    method_parts = []
+    if personal is not None and adjusted_live is not None:
+        # Prefer history when we have medium+ confidence; still respect live traffic.
+        if model["confidence"] in ("high", "medium"):
+            blended = round(0.65 * personal + 0.35 * adjusted_live, 1)
+            method_parts.append("history+live_bias")
+        else:
+            blended = round(0.40 * personal + 0.60 * adjusted_live, 1)
+            method_parts.append("live_bias+history")
+    elif personal is not None:
+        blended = personal
+        method_parts.append("history_only")
+    elif adjusted_live is not None:
+        blended = adjusted_live
+        method_parts.append("live_plus_bias")
+    elif tomtom is not None:
+        blended = tomtom["travel_mins"]
+        method_parts.append("tomtom_only")
+
+    out = {
+        "route_id": route_id,
+        "route_name": row["name"],
+        **model,
+        "tomtom_mins": tomtom["travel_mins"] if tomtom else None,
+        "delay_mins": tomtom["delay_mins"] if tomtom else None,
+        "length_km": tomtom["length_km"] if tomtom else None,
+        "adjusted_live_mins": adjusted_live,
+        "blended_mins": blended,
+        "method": "+".join(method_parts) if method_parts else "insufficient_data",
+    }
+    api_log.info(
+        f"ROUTE_PRED| route_id={route_id} | blended={blended} personal={personal} "
+        f"tomtom={out['tomtom_mins']} conf={model['confidence']}")
+    return jsonify(out)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1249,16 +1468,23 @@ def start_session(route_id):
         }), 400
     dest_lat, dest_lng, dest_method = resolved
 
+    # Snapshot live TomTom ETA onto the trip so later predict() can learn est→actual bias.
+    est_mins = None
+    try:
+        est_mins = _tomtom_eta_for_route(route)["travel_mins"]
+    except Exception:
+        pass
+
     now_iso = _now_iso()
     cur = db.execute(
-        "INSERT INTO route_logs (route_id, log_date, actual_mins, status, source, started_at) "
-        "VALUES (?,?,?,?,?,?)",
-        (route_id, date.today().isoformat(), 0, "active", "live_session", now_iso))
+        "INSERT INTO route_logs (route_id, log_date, estimated_mins, actual_mins, status, source, started_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (route_id, date.today().isoformat(), est_mins, 0, "active", "live_session", now_iso))
     db.commit()
     row = db.execute("SELECT * FROM route_logs WHERE id=?", (cur.lastrowid,)).fetchone()
     db.close()
     api_log.info(f"SESSION  | START | route_id={route_id} | session_id={cur.lastrowid} "
-                 f"| dest=({dest_lat},{dest_lng}) via {dest_method} | {now_iso}")
+                 f"| dest=({dest_lat},{dest_lng}) via {dest_method} | est={est_mins} | {now_iso}")
     result = dict(row)
     result.update({"dest_lat": dest_lat, "dest_lng": dest_lng, "dest_method": dest_method})
     return jsonify(result), 201

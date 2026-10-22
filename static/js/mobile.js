@@ -265,11 +265,32 @@ function flashPass(name, mins) {
 
 async function loadEta() {
   const el = document.getElementById("m-eta");
+  const sub = document.getElementById("m-eta-sub");
   if (!el) return;
-  const { ok, data } = await api(`/api/routes/${RD.routeId}/eta`);
-  el.textContent = ok && data && data.travel_mins !== undefined
-    ? data.travel_mins + " min"
-    : "—";
+  el.textContent = "…";
+  if (sub) sub.textContent = "Building personal ETA…";
+  const { ok, data } = await api(`/api/routes/${RD.routeId}/predict`);
+  if (!ok || !data || data.blended_mins == null) {
+    // Fall back to raw TomTom if predict has no history yet
+    const live = await api(`/api/routes/${RD.routeId}/eta`);
+    if (live.ok && live.data && live.data.travel_mins != null) {
+      el.textContent = live.data.travel_mins + " min";
+      if (sub) sub.textContent = "TomTom live (no history yet)";
+    } else {
+      el.textContent = "—";
+      if (sub) sub.textContent = "ETA unavailable";
+    }
+    return;
+  }
+  el.textContent = data.blended_mins + " min";
+  const bits = [];
+  if (data.personal_mins != null) bits.push("history " + data.personal_mins);
+  if (data.tomtom_mins != null) bits.push("TomTom " + data.tomtom_mins);
+  if (data.samples && data.samples.same_weekday && data.samples.same_weekday.n) {
+    bits.push(data.weekday + " n=" + data.samples.same_weekday.n);
+  }
+  bits.push("conf " + data.confidence);
+  if (sub) sub.textContent = bits.join(" · ");
 }
 
 async function refreshSessionState() {

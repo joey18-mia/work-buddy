@@ -525,7 +525,8 @@ function renderRouteCarousel() {
       ${desc}
       <div class="route-eta-result" id="eta-${r.id}"></div>
       <div class="route-actions">
-        <button class="btn-sm primary" onclick="getETA(${r.id})">📍 ETA</button>
+        <button class="btn-sm primary" onclick="getPredict(${r.id})">🔮 Predict</button>
+        <button class="btn-sm" onclick="getETA(${r.id})">📍 TomTom</button>
         <button class="btn-sm" onclick="openLogModal(${r.id},'${escHtml(r.name)}')">📋 Log</button>
         <button class="btn-sm" onclick="openCheckpoints(${r.id},'${escHtml(r.name)}')">📌 Checkpoints</button>
         <button class="btn-sm ${Number.isFinite(r.dest_lat)?'has-geo':''}" onclick="openDestinationEditor(${r.id},'${escHtml(r.name)}')">🎯 Destination</button>
@@ -542,13 +543,38 @@ async function deleteRoute(id) {
 }
 async function getETA(routeId) {
   const el = document.getElementById(`eta-${routeId}`);
-  el.textContent = 'Fetching ETA…';
+  el.textContent = 'Fetching TomTom ETA…';
   try {
     const d = await fetchJSON(`/api/routes/${routeId}/eta`);
     if (d.error==='no_key') { el.textContent='⚠ Add TOMTOM_API_KEY to .env'; return; }
-    el.textContent = `🕒 ${d.travel_mins} min  (+${d.delay_mins} min traffic)  ${d.length_km} km`;
+    el.textContent = `🕒 TomTom ${d.travel_mins} min  (+${d.delay_mins} min traffic)  ${d.length_km} km`;
     state.activeLogEta = d.travel_mins;
   } catch(e) { el.textContent=`Error: ${e.message}`; }
+}
+
+async function getPredict(routeId) {
+  const el = document.getElementById(`eta-${routeId}`);
+  el.textContent = 'Building personal ETA…';
+  try {
+    const d = await fetchJSON(`/api/routes/${routeId}/predict`);
+    const bits = [];
+    if (d.blended_mins != null) bits.push(`🔮 WorkBuddy ${d.blended_mins} min`);
+    if (d.personal_mins != null) bits.push(`history ${d.personal_mins}`);
+    if (d.tomtom_mins != null) bits.push(`TomTom ${d.tomtom_mins}`);
+    if (d.adjusted_live_mins != null && d.samples?.est_vs_actual_bias?.avg_delta != null) {
+      const bias = d.samples.est_vs_actual_bias.avg_delta;
+      bits.push(`bias ${bias > 0 ? '+' : ''}${bias}`);
+    }
+    const dow = d.samples?.same_weekday;
+    const woy = d.samples?.same_week_of_year;
+    const detail = [];
+    if (dow?.n) detail.push(`${d.weekday} avg ${dow.avg} (n=${dow.n})`);
+    if (woy?.n) detail.push(`week ${d.week_of_year} avg ${woy.avg} (n=${woy.n})`);
+    el.innerHTML = `${bits.join(' · ')}<div class="eta-detail">conf ${d.confidence}${detail.length ? ' · ' + detail.join(' · ') : ''}</div>`;
+    if (d.blended_mins != null) state.activeLogEta = d.blended_mins;
+  } catch (e) {
+    el.textContent = `Error: ${e.message}`;
+  }
 }
 function _renderCheckpointInputs(cps, existingTimes) {
   const byId = {};

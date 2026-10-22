@@ -242,7 +242,8 @@ html,body{height:100%;background:var(--bg);color:var(--text-hi);font-family:'DM 
 .route-item:hover{border-color:var(--accent);}
 .route-name{font-size:13px;font-weight:600;color:var(--text-hi);margin-bottom:2px;}
 .route-addresses{font-family:'DM Mono',monospace;font-size:10px;color:var(--text-lo);line-height:1.7;margin-bottom:3px;}
-.route-eta-result{font-family:'DM Mono',monospace;font-size:11px;color:var(--accent);min-height:15px;margin:3px 0 7px;}
+.route-eta-result{font-family:'DM Mono',monospace;font-size:11px;color:var(--accent);min-height:15px;margin:3px 0 7px;line-height:1.45;}
+.route-eta-result .eta-detail{color:var(--text-md);font-size:10px;margin-top:2px;}
 .route-actions{display:flex;gap:5px;flex-wrap:wrap;}
 .carousel-nav{background:none;border:1px solid var(--border-hi);color:var(--text-md);font-size:14px;width:22px;height:22px;border-radius:5px;cursor:pointer;transition:all .15s;line-height:1;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 .carousel-nav:hover{border-color:var(--accent);color:var(--accent);}
