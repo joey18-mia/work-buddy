@@ -159,24 +159,71 @@ async function loadCheckpoints() {
   const { data } = await api(`/api/routes/${RD.routeId}/checkpoints`);
   RD.checkpoints = data || [];
   renderCheckpoints();
+  updateGpsReady();
+}
+
+function cpHasPin(c) {
+  return Number.isFinite(c.lat) && Number.isFinite(c.lng);
+}
+
+function destHasPin() {
+  return RD.route && Number.isFinite(RD.route.dest_lat) && Number.isFinite(RD.route.dest_lng);
+}
+
+function updateGpsReady() {
+  const sub = document.getElementById("m-gps-ready-sub");
+  const list = document.getElementById("m-gps-ready-list");
+  const card = document.getElementById("m-gps-ready-card");
+  if (!sub || !list) return;
+
+  const pinned = RD.checkpoints.filter(cpHasPin).length;
+  const total = RD.checkpoints.length;
+  const destOk = destHasPin();
+  const ready = destOk && (total === 0 || pinned === total);
+
+  if (card) card.classList.toggle("m-ready-ok", ready);
+  if (card) card.classList.toggle("m-ready-warn", !ready);
+
+  if (total === 0 && destOk) {
+    sub.textContent = "Destination pinned. No checkpoints — timer + auto-end only.";
+  } else if (ready) {
+    sub.textContent = total
+      ? `Ready — destination + ${pinned}/${total} checkpoints pinned.`
+      : "Ready — destination pinned.";
+  } else {
+    const missing = [];
+    if (!destOk) missing.push("destination");
+    if (total && pinned < total) missing.push(`${total - pinned} checkpoint pin(s)`);
+    sub.textContent = "Incomplete — still need: " + missing.join(", ") + ".";
+  }
+
+  const items = [];
+  items.push(`<li class="${destOk ? "ok" : "miss"}">${destOk ? "✓" : "○"} Destination geofence</li>`);
+  RD.checkpoints.forEach((c) => {
+    const ok = cpHasPin(c);
+    items.push(`<li class="${ok ? "ok" : "miss"}">${ok ? "✓" : "○"} ${esc(c.name)}</li>`);
+  });
+  if (!total) items.push(`<li class="ok">✓ No checkpoints to pin</li>`);
+  list.innerHTML = items.join("");
 }
 
 function renderCheckpoints(passMap) {
   const el = document.getElementById("m-checkpoints");
   if (!el) return;
   if (!RD.checkpoints.length) {
-    el.innerHTML = '<div class="m-empty">No checkpoints</div>';
+    el.innerHTML = '<div class="m-empty">No checkpoints — add them on desktop, then pin here</div>';
+    updateGpsReady();
     return;
   }
   el.innerHTML = RD.checkpoints.map((c) => {
     const hit = passMap && passMap[c.id];
     const sub = hit
       ? "Passed at " + hit.minutes_from_start + " min"
-      : "Not yet reached";
-    const hasGeo = Number.isFinite(c.lat) && Number.isFinite(c.lng);
+      : (RD.session ? "Waiting for geofence…" : "Not yet reached");
+    const hasGeo = cpHasPin(c);
     const geo = hasGeo
       ? `📍 ${c.lat.toFixed(4)},${c.lng.toFixed(4)} · ${c.radius_m == null ? 150 : c.radius_m}m`
-      : "No pin set";
+      : "No pin — won't auto-mark";
     return `
       <div class="m-list-item ${hit ? "passed" : ""}">
         <div class="m-cp-pos">${c.position}</div>
@@ -189,20 +236,31 @@ function renderCheckpoints(passMap) {
               : `<button class="m-cp-pinbtn ${hasGeo ? "has-geo" : ""}" onclick="editCheckpointPin(${c.id}, '${esc(c.name).replace(/'/g, "\\'")}')">📍 Pin</button>`}
       </div>`;
   }).join("");
+  updateGpsReady();
 }
 
 function updateDestStatus() {
   const el = document.getElementById("m-dest-status");
   if (!el || !RD.route) return;
-  if (Number.isFinite(RD.route.dest_lat) && Number.isFinite(RD.route.dest_lng)) {
+  if (destHasPin()) {
     const rad = RD.route.dest_radius_m == null ? 150 : RD.route.dest_radius_m;
     const ae = RD.route.auto_end_minutes == null ? 5 : RD.route.auto_end_minutes;
     el.textContent = `📍 ${RD.route.dest_lat.toFixed(4)},${RD.route.dest_lng.toFixed(4)} · ${rad}m · auto-end ${ae}m`;
     el.classList.add("has-geo");
   } else {
-    el.textContent = "Not set — resolved from address/waypoints at start";
+    el.textContent = "Not set — will try address / map waypoints at start";
     el.classList.remove("has-geo");
   }
+  updateGpsReady();
+}
+
+function flashPass(name, mins) {
+  const msg = document.getElementById("m-start-msg");
+  if (!msg) return;
+  msg.textContent = "✓ Passed " + name + " at " + mins + " min";
+  msg.classList.add("m-msg-ok");
+  clearTimeout(flashPass._t);
+  flashPass._t = setTimeout(() => msg.classList.remove("m-msg-ok"), 4000);
 }
 
 async function loadEta() {
@@ -263,13 +321,35 @@ async function refreshSessionState() {
 /* GPS banner + location loop.
    Success → next fix in 60s. Failure → GPS-lost banner, retry in 30s.
    The elapsed timer is independent and keeps running regardless. */
-function setGpsBanner(lost) {
+function setGpsBanner(lost, detail) {
   const b = document.getElementById("m-gps-banner");
-  if (b) b.classList.toggle("hidden", !lost);
+  if (!b) return;
+  b.classList.toggle("hidden", !lost);
+  if (lost) {
+    b.textContent = detail
+      ? ("📡 " + detail)
+      : "📡 GPS lost — retrying…";
+  }
+}
+
+function gpsInsecureHint() {
+  // Safari (and Chrome) require a secure context for the permission prompt.
+  // Plain http://100.x Tailscale IPs are often NOT secure → no prompt, silent fail.
+  if (typeof window.isSecureContext === "boolean" && !window.isSecureContext) {
+    return "Location blocked: open WorkBuddy over HTTPS (Tailscale Serve) or home Wi‑Fi localhost — plain http:// IPs won't prompt in Safari.";
+  }
+  return null;
 }
 
 function startGpsLoop(sessionId) {
   stopGpsLoop();
+  const insecure = gpsInsecureHint();
+  if (insecure) {
+    setGpsBanner(true, insecure);
+    const msg = document.getElementById("m-start-msg");
+    if (msg) msg.textContent = insecure;
+    // Still try — some browsers allow LAN HTTP — but surface why prompt may never appear.
+  }
   getFix(sessionId);
 }
 
@@ -279,15 +359,30 @@ function stopGpsLoop() {
   setGpsBanner(false);
 }
 
+function geoErrorText(err) {
+  if (!err) return "GPS failed";
+  // 1 PERMISSION_DENIED, 2 POSITION_UNAVAILABLE, 3 TIMEOUT
+  if (err.code === 1) {
+    const insecure = gpsInsecureHint();
+    return insecure || "Location permission denied — check Safari site settings for this address.";
+  }
+  if (err.code === 2) return "GPS unavailable — try outdoors / wait for a fix.";
+  if (err.code === 3) return "GPS timed out — retrying…";
+  return err.message || "GPS failed";
+}
+
 function getFix(sessionId) {
   if (!navigator.geolocation) {
-    setGpsBanner(true);
+    setGpsBanner(true, "Geolocation API missing in this browser");
     M.gpsTimer = setTimeout(() => getFix(sessionId), 30000);
     return;
   }
   navigator.geolocation.getCurrentPosition(
     (pos) => { onFix(sessionId, pos); M.gpsTimer = setTimeout(() => getFix(sessionId), 60000); },
-    () => { setGpsBanner(true); M.gpsTimer = setTimeout(() => getFix(sessionId), 30000); },
+    (err) => {
+      setGpsBanner(true, geoErrorText(err));
+      M.gpsTimer = setTimeout(() => getFix(sessionId), 30000);
+    },
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
   );
 }
@@ -313,6 +408,7 @@ async function onFix(sessionId, pos) {
   }
   // Reflect any checkpoint pass immediately (poll would also catch it).
   if (data.events && data.events.checkpoints_passed && data.events.checkpoints_passed.length) {
+    data.events.checkpoints_passed.forEach((c) => flashPass(c.name, c.minutes_from_start));
     const { data: s } = await api("/api/sessions/" + sessionId);
     if (s && s.checkpoints) {
       const passMap = {};
@@ -382,10 +478,28 @@ function stopPolling() {
 async function startRoute() {
   const btn = document.getElementById("m-start-btn");
   const msg = document.getElementById("m-start-msg");
+
+  // Soft gate: warn if geofences aren't ready, but still allow Start.
+  const unpinned = RD.checkpoints.filter((c) => !cpHasPin(c));
+  if (!destHasPin() || unpinned.length) {
+    const lines = [];
+    if (!destHasPin()) lines.push("Destination pin not set (will try address/map waypoints).");
+    if (unpinned.length) {
+      lines.push(unpinned.length + " checkpoint(s) without pins won't auto-mark:");
+      unpinned.forEach((c) => lines.push("  • " + c.name));
+    }
+    if (!confirm("GPS setup incomplete:\n\n" + lines.join("\n") + "\n\nStart anyway?")) return;
+  }
+
+  if (!navigator.geolocation) {
+    if (!confirm("This device has no geolocation. Timer will still run, but checkpoints won't auto-mark. Start anyway?")) return;
+  }
+
   btn.disabled = true;
+  if (msg) { msg.textContent = ""; msg.classList.remove("m-msg-ok"); }
+
   const { ok, status, data } = await api(`/api/routes/${RD.routeId}/sessions/start`, "POST", {});
   if (ok) {
-    if (msg) msg.textContent = "";
     // refreshSessionState() starts the timer, poller, and GPS loop — the
     // first geolocation call prompts the user for permission.
     await refreshSessionState();
@@ -506,8 +620,40 @@ async function mPinSearch() {
   }
 }
 
+function mPinUseLocation() {
+  const el = document.getElementById("m-pin-coords");
+  const insecure = gpsInsecureHint();
+  if (insecure) {
+    if (el) el.textContent = insecure;
+    return;
+  }
+  if (!navigator.geolocation) {
+    if (el) el.textContent = "Geolocation not available on this device";
+    return;
+  }
+  if (el) el.textContent = "Getting GPS fix…";
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      setMPinPoint(lat, lng);
+      if (MPIN.map) MPIN.map.setView([lat, lng], 16);
+      const acc = Number.isFinite(pos.coords.accuracy) ? ` · ±${Math.round(pos.coords.accuracy)}m` : "";
+      if (el) el.textContent = `📍 Current location ${lat.toFixed(6)}, ${lng.toFixed(6)}${acc}`;
+    },
+    (err) => {
+      if (el) el.textContent = geoErrorText(err);
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
+  );
+}
+
 async function mSavePin() {
-  if (!Number.isFinite(MPIN.lat) || !Number.isFinite(MPIN.lng)) return;
+  if (!Number.isFinite(MPIN.lat) || !Number.isFinite(MPIN.lng)) {
+    const el = document.getElementById("m-pin-coords");
+    if (el) el.textContent = "Place a pin first (map tap or 📍 Me)";
+    return;
+  }
   const radius = parseInt(document.getElementById("m-pin-radius").value) || 150;
   const aeWrap = document.getElementById("m-pin-autoend-wrap");
   const autoEnd = aeWrap.style.display !== "none"

@@ -250,6 +250,14 @@ body{
   font-family:'DM Sans',Arial,sans-serif;font-size:13px;font-weight:600;cursor:pointer;
 }
 .m-cp-pinbtn.has-geo{border-color:var(--success);color:var(--success);}
+.m-ready-list{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:4px;}
+.m-ready-list li{font-size:13px;color:var(--text-md);}
+.m-ready-list li.ok{color:var(--success);}
+.m-ready-list li.miss{color:var(--warning);}
+.m-ready-ok{border-color:rgba(34,197,94,.35);}
+.m-ready-warn{border-color:rgba(245,158,11,.4);}
+.m-msg-ok{color:var(--success);}
+.m-list-item.passed{border-color:var(--success);background:rgba(34,197,94,.08);}
 
 /* ── Pin picker overlay ── */
 .m-pin-overlay{

@@ -30,6 +30,12 @@
 <button class="m-btn m-btn-end hidden" id="m-end-btn" onclick="endRoute()">END ROUTE</button>
 <div id="m-start-msg" class="m-msg"></div>
 
+<div class="m-card" id="m-gps-ready-card">
+  <div class="m-toggle-title">GPS setup</div>
+  <div class="m-toggle-sub" id="m-gps-ready-sub">Checking pins…</div>
+  <ul class="m-ready-list" id="m-gps-ready-list"></ul>
+</div>
+
 <div class="m-card m-setup-row" id="m-setup-card">
   <div class="m-toggle-text">
     <div class="m-toggle-title">Destination pin</div>
@@ -39,6 +45,7 @@
 </div>
 
 <h2 class="m-h2">Checkpoints</h2>
+<p class="m-sub" style="margin-top:-6px">Pin each stop so the phone can auto-mark it while you drive. Unpinned stops are skipped.</p>
 <div id="m-checkpoints" class="m-list">
   <div class="m-empty">No checkpoints</div>
 </div>
@@ -53,12 +60,13 @@
     <input id="m-pin-search" type="text" placeholder="Search an address…"
            onkeydown="if(event.key==='Enter')mPinSearch()">
     <button class="m-btn m-btn-sm" onclick="mPinSearch()">Go</button>
+    <button class="m-btn m-btn-sm" type="button" onclick="mPinUseLocation()">📍 Me</button>
   </div>
   <div id="m-pin-map" class="m-pin-map"></div>
   <div class="m-pin-controls">
     <label class="m-pin-field">Radius <input id="m-pin-radius" type="number" min="20" step="10" value="150" oninput="onMPinRadiusInput()"> m</label>
     <label class="m-pin-field" id="m-pin-autoend-wrap">Auto-end <input id="m-pin-autoend" type="number" min="0" step="1" value="5"> min</label>
-    <span id="m-pin-coords" class="m-pin-coords">Tap the map to place the pin</span>
+    <span id="m-pin-coords" class="m-pin-coords">Tap the map or use 📍 Me</span>
   </div>
   <button class="m-btn" onclick="mSavePin()">Save Location</button>
 </div>

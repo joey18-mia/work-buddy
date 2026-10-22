@@ -1259,6 +1259,25 @@ async function pinSearch() {
   try { const d = await fetchJSON(`/api/geocode?q=${encodeURIComponent(q)}`); state.pinMap.setView([d.lat, d.lng], 15); setPinPoint(d.lat, d.lng); }
   catch { alert('Address not found.'); }
 }
+function pinUseLocation() {
+  const el = document.getElementById('pin-coords');
+  if (!navigator.geolocation) {
+    if (el) el.textContent = 'Geolocation not available in this browser';
+    return;
+  }
+  if (el) el.textContent = 'Getting GPS fix…';
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const lat = pos.coords.latitude, lng = pos.coords.longitude;
+      setPinPoint(lat, lng);
+      if (state.pinMap) state.pinMap.setView([lat, lng], 16);
+      const acc = Number.isFinite(pos.coords.accuracy) ? ` · ±${Math.round(pos.coords.accuracy)}m` : '';
+      if (el) el.textContent = `📍 Current location ${lat.toFixed(6)}, ${lng.toFixed(6)}${acc}`;
+    },
+    (err) => { if (el) el.textContent = 'GPS failed — ' + (err?.message || 'permission denied'); },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
+  );
+}
 // Live-update the circle as the radius field changes.
 function onPinRadiusInput() {
   if (state.pinCircle && Number.isFinite(state.pin?.lat)) {

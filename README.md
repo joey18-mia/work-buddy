@@ -94,6 +94,21 @@ To expose it outside home Wi‑Fi (port forward, Cloudflare Tunnel, Tailscale, e
 
 **Transport:** Login is not a substitute for HTTPS. Prefer a tunnel/VPN (Tailscale, Cloudflare Tunnel, Caddy) over raw HTTP port-forwarding — browsers often block geolocation on insecure origins.
 
+### Tailscale + Safari GPS (recommended for commute)
+
+Safari on iPhone often **will not show a location prompt** on plain `http://100.x.x.x:5000`. Use Tailscale HTTPS Serve on the PC:
+
+```bash
+# On the WorkBuddy PC (Tailscale installed, WorkBuddy running on :5000)
+tailscale serve --bg 5000
+```
+
+Then on the phone open the HTTPS MagicDNS URL Tailscale prints, e.g.:
+
+`https://your-pc.tailnet-name.ts.net/m/`
+
+(Keep Tailscale connected on the phone.) After that, **START ROUTE** or **📍 Me** should prompt for Location.
+
 See `PHASE2.5_REMOTE_ACCESS.md` for the full auth spec.
 
 ---
