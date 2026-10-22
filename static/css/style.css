@@ -379,6 +379,8 @@ html,body{height:100%;background:var(--bg);color:var(--text-hi);font-family:'DM 
 .history-table th{text-align:left;color:var(--text-lo);font-size:10px;text-transform:uppercase;letter-spacing:.07em;padding:0 10px 10px;border-bottom:1px solid var(--border);}
 .history-table td{padding:9px 10px;border-bottom:1px solid var(--border);color:var(--text-hi);}
 .history-table tr:last-child td{border-bottom:none;}
+.history-actions{white-space:nowrap;text-align:right;}
+.history-actions .btn-sm{margin-left:4px;}
 .diff-positive{color:var(--danger);}
 .diff-negative{color:var(--success);}
 

@@ -873,6 +873,106 @@ def add_log(route_id):
     return jsonify(dict(row)), 201
 
 
+@app.route("/api/routes/<int:route_id>/logs/<int:log_id>", methods=["PUT"])
+def update_log(route_id, log_id):
+    """Edit an existing trip's actual time, date, notes, and checkpoint times."""
+    data = request.json or {}
+    db = get_routes_db()
+    row = db.execute(
+        "SELECT * FROM route_logs WHERE id=? AND route_id=?",
+        (log_id, route_id)).fetchone()
+    if not row:
+        db.close()
+        return jsonify({"error": "not found"}), 404
+    if row["status"] == "active":
+        db.close()
+        return jsonify({"error": "Cannot edit an active live session — end it first"}), 409
+
+    actual = data.get("actual_mins", row["actual_mins"])
+    try:
+        actual = float(actual)
+    except (TypeError, ValueError):
+        db.close()
+        return jsonify({"error": "actual_mins must be a number"}), 400
+    if actual <= 0:
+        db.close()
+        return jsonify({"error": "actual_mins must be > 0"}), 400
+
+    log_date = data.get("log_date", row["log_date"]) or row["log_date"]
+    notes = data["notes"] if "notes" in data else (row["notes"] or "")
+    if "estimated_mins" in data:
+        est = data["estimated_mins"]
+        try:
+            est = float(est) if est is not None and est != "" else None
+        except (TypeError, ValueError):
+            db.close()
+            return jsonify({"error": "estimated_mins must be a number"}), 400
+    else:
+        est = row["estimated_mins"]
+
+    db.execute(
+        "UPDATE route_logs SET log_date=?, estimated_mins=?, actual_mins=?, notes=? WHERE id=?",
+        (log_date, est, actual, notes, log_id))
+
+    # Replace checkpoint times when the client sends the array (allows clearing).
+    if "checkpoint_times" in data:
+        db.execute("DELETE FROM checkpoint_logs WHERE route_log_id=?", (log_id,))
+        saved_cp = 0
+        for ct in data.get("checkpoint_times") or []:
+            if ct.get("checkpoint_id") is None or ct.get("minutes_from_start") is None:
+                continue
+            try:
+                mins = float(ct["minutes_from_start"])
+                if mins >= 0:
+                    db.execute(
+                        "INSERT INTO checkpoint_logs (route_log_id,checkpoint_id,minutes_from_start) VALUES (?,?,?)",
+                        (log_id, int(ct["checkpoint_id"]), mins))
+                    saved_cp += 1
+            except (ValueError, TypeError):
+                pass
+        api_log.info(
+            f"ROUTE_LOG| EDIT | route_id={route_id} log_id={log_id} | "
+            f"total={actual}min | checkpoints={saved_cp}")
+    else:
+        api_log.info(
+            f"ROUTE_LOG| EDIT | route_id={route_id} log_id={log_id} | total={actual}min")
+
+    db.commit()
+    updated = db.execute("SELECT * FROM route_logs WHERE id=?", (log_id,)).fetchone()
+    cp_times = db.execute("""
+        SELECT cl.*, c.name as checkpoint_name, c.position
+        FROM checkpoint_logs cl
+        JOIN checkpoints c ON c.id = cl.checkpoint_id
+        WHERE cl.route_log_id = ?
+        ORDER BY c.position
+    """, (log_id,)).fetchall()
+    db.close()
+    out = dict(updated)
+    out["checkpoint_times"] = [dict(ct) for ct in cp_times]
+    return jsonify(out)
+
+
+@app.route("/api/routes/<int:route_id>/logs/<int:log_id>", methods=["DELETE"])
+def delete_log(route_id, log_id):
+    """Remove a completed trip (and its checkpoint times) from history."""
+    db = get_routes_db()
+    row = db.execute(
+        "SELECT * FROM route_logs WHERE id=? AND route_id=?",
+        (log_id, route_id)).fetchone()
+    if not row:
+        db.close()
+        return jsonify({"error": "not found"}), 404
+    if row["status"] == "active":
+        db.close()
+        return jsonify({"error": "Cannot delete an active live session — cancel it instead"}), 409
+    db.execute("DELETE FROM checkpoint_logs WHERE route_log_id=?", (log_id,))
+    db.execute("DELETE FROM route_logs WHERE id=?", (log_id,))
+    db.commit()
+    db.close()
+    api_log.info(f"ROUTE_LOG| DELETE | route_id={route_id} log_id={log_id}")
+    return jsonify({"ok": True})
+
+
 # ─────────────────────────────────────────────────────────────
 #  LIVE ROUTE SESSIONS  (Phase 2)
 # ─────────────────────────────────────────────────────────────

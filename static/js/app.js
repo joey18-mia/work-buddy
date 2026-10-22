@@ -15,6 +15,10 @@ const state = {
   settings:       {},
   activeLogRoute: null,
   activeLogEta:   null,
+  editingLogId:   null,   // null = create; set = edit existing trip
+  historyRouteId: null,
+  historyRouteName: null,
+  historyById:    {},     // id → log row (for Edit from history)
   activeCheckpointRoute: null,
   mlbWeekStart:   null,
   uploadedFile:   null,
@@ -546,8 +550,25 @@ async function getETA(routeId) {
     state.activeLogEta = d.travel_mins;
   } catch(e) { el.textContent=`Error: ${e.message}`; }
 }
+function _renderCheckpointInputs(cps, existingTimes) {
+  const byId = {};
+  (existingTimes || []).forEach(ct => { byId[ct.checkpoint_id] = ct.minutes_from_start; });
+  if (!cps.length) {
+    return '<div style="color:var(--text-lo);font-size:11px;font-style:italic">No checkpoints — add them via 📌 Checkpoints on the route card.</div>';
+  }
+  return '<div class="cp-log-header">Checkpoint Times <span style="color:var(--text-lo);font-weight:400;font-size:10px">(optional — leave blank to skip)</span></div>'
+    + cps.map(cp => {
+      const val = byId[cp.id] != null ? byId[cp.id] : '';
+      return `<div class="cp-log-row"><div class="cp-log-name"><span class="cp-position">${cp.position}</span>${cp.name}</div><div class="cp-log-input-wrap"><input type="number" class="cp-log-input" id="cp-time-${cp.id}" placeholder="—" min="0" step="0.5" data-cp-id="${cp.id}" value="${val}"><span class="cp-log-unit">min from start</span></div></div>`;
+    }).join('');
+}
+
 function openLogModal(routeId, routeName) {
   state.activeLogRoute = routeId;
+  state.editingLogId   = null;
+  state.activeLogEta   = state.activeLogEta ?? null;
+  document.getElementById('log-modal-title').textContent = 'Log Route';
+  document.getElementById('log-save-btn').textContent = 'Log It';
   document.getElementById('log-route-name').textContent = routeName;
   document.getElementById('log-actual').value = '';
   document.getElementById('log-notes').value  = '';
@@ -558,36 +579,84 @@ function openLogModal(routeId, routeName) {
   if (cpSection) cpSection.innerHTML = '<div style="color:var(--text-lo);font-size:11px">Loading…</div>';
   openModal('log-modal');
   fetchJSON(`/api/routes/${routeId}/checkpoints`).then(cps => {
-    if (!cpSection) return;
-    if (!cps.length) {
-      cpSection.innerHTML = '<div style="color:var(--text-lo);font-size:11px;font-style:italic">No checkpoints — add them via 📌 Checkpoints on the route card.</div>';
-      return;
-    }
-    cpSection.innerHTML = '<div class="cp-log-header">Checkpoint Times <span style="color:var(--text-lo);font-weight:400;font-size:10px">(all optional — leave blank to skip)</span></div>'
-      + cps.map(cp =>
-        `<div class="cp-log-row"><div class="cp-log-name"><span class="cp-position">${cp.position}</span>${cp.name}</div><div class="cp-log-input-wrap"><input type="number" class="cp-log-input" id="cp-time-${cp.id}" placeholder="—" min="0" step="0.5" data-cp-id="${cp.id}"><span class="cp-log-unit">min from start</span></div></div>`
-      ).join('');
+    if (cpSection) cpSection.innerHTML = _renderCheckpointInputs(cps, []);
   }).catch(() => { if (cpSection) cpSection.innerHTML = ''; });
 }
+
+async function openEditLog(routeId, routeName, log) {
+  state.activeLogRoute = routeId;
+  state.editingLogId   = log.id;
+  state.activeLogEta   = log.estimated_mins != null ? log.estimated_mins : null;
+  document.getElementById('log-modal-title').textContent = 'Edit Trip';
+  document.getElementById('log-save-btn').textContent = 'Save Changes';
+  document.getElementById('log-route-name').textContent = routeName;
+  document.getElementById('log-actual').value = log.actual_mins ?? '';
+  document.getElementById('log-notes').value  = log.notes || '';
+  document.getElementById('log-date').value   = (log.log_date || '').slice(0, 10);
+  document.getElementById('log-eta-display').textContent =
+    log.estimated_mins != null
+      ? `Estimated (saved): ${log.estimated_mins} min — leave actual to correct the trip.`
+      : 'No estimated time stored on this trip.';
+  const cpSection = document.getElementById('log-checkpoints-section');
+  if (cpSection) cpSection.innerHTML = '<div style="color:var(--text-lo);font-size:11px">Loading…</div>';
+  closeModal('history-modal');
+  openModal('log-modal');
+  try {
+    const cps = await fetchJSON(`/api/routes/${routeId}/checkpoints`);
+    if (cpSection) cpSection.innerHTML = _renderCheckpointInputs(cps, log.checkpoint_times || []);
+  } catch {
+    if (cpSection) cpSection.innerHTML = '';
+  }
+}
+
 async function saveLog() {
   const actual = parseFloat(document.getElementById('log-actual').value);
-  if (!actual||actual<=0) return alert('Enter your actual travel time in minutes.');
+  if (!actual || actual <= 0) return alert('Enter your actual travel time in minutes.');
   const checkpoint_times = [];
   document.querySelectorAll('.cp-log-input').forEach(input => {
     const val = parseFloat(input.value);
     if (!isNaN(val) && val >= 0)
       checkpoint_times.push({ checkpoint_id: parseInt(input.dataset.cpId), minutes_from_start: val });
   });
-  await fetchJSON(`/api/routes/${state.activeLogRoute}/logs`, 'POST', {
+  const payload = {
     actual_mins:    actual,
     log_date:       document.getElementById('log-date').value,
     notes:          document.getElementById('log-notes').value.trim(),
-    estimated_mins: state.activeLogEta ?? null,
     checkpoint_times,
-  });
-  closeModal('log-modal'); state.activeLogEta = null;
+  };
+  const routeId = state.activeLogRoute;
+  const routeName = document.getElementById('log-route-name').textContent;
+  try {
+    if (state.editingLogId) {
+      if (state.activeLogEta != null) payload.estimated_mins = state.activeLogEta;
+      await fetchJSON(`/api/routes/${routeId}/logs/${state.editingLogId}`, 'PUT', payload);
+    } else {
+      payload.estimated_mins = state.activeLogEta ?? null;
+      await fetchJSON(`/api/routes/${routeId}/logs`, 'POST', payload);
+    }
+    closeModal('log-modal');
+    state.activeLogEta = null;
+    state.editingLogId = null;
+    // Return to history after an edit so the tweak is visible
+    if (state.historyRouteId === routeId) openHistory(routeId, routeName);
+  } catch (e) {
+    alert(e.message || 'Failed to save trip');
+  }
 }
+
+async function deleteHistoryLog(routeId, logId) {
+  if (!confirm('Delete this trip from history?')) return;
+  try {
+    await fetchJSON(`/api/routes/${routeId}/logs/${logId}`, 'DELETE');
+    openHistory(routeId, state.historyRouteName || document.getElementById('history-route-name').textContent);
+  } catch (e) {
+    alert(e.message || 'Failed to delete trip');
+  }
+}
+
 async function openHistory(routeId, routeName) {
+  state.historyRouteId = routeId;
+  state.historyRouteName = routeName;
   document.getElementById('history-route-name').textContent = routeName;
   const body = document.getElementById('history-body');
   body.innerHTML='<div class="skeleton-block"></div>';
@@ -599,23 +668,25 @@ async function openHistory(routeId, routeName) {
     ]);
     if (!logs.length) { body.innerHTML=`<div class="day-empty">No logs yet.</div>`; return; }
 
+    state.historyById = {};
+    logs.forEach(l => { state.historyById[l.id] = l; });
+
     const rows = logs.map(l => {
       const diff    = l.estimated_mins!=null?(l.actual_mins-l.estimated_mins).toFixed(1):'—';
       const diffCls = diff!=='—'?(parseFloat(diff)>0?'diff-positive':'diff-negative'):'';
       const diffStr = diff!=='—'?(parseFloat(diff)>0?`+${diff}`:diff)+' min':'—';
 
-      // Build checkpoint breakdown if any were logged
       let cpRows = '';
       if (l.checkpoint_times?.length && cps.length) {
         const sorted = [...l.checkpoint_times].sort((a,b)=>a.position-b.position);
         let prevMin  = 0;
-        cpRows = `<tr><td colspan="5" class="cp-history-block">
+        cpRows = `<tr><td colspan="6" class="cp-history-block">
           <div class="cp-history-title">Checkpoint breakdown:</div>
-          ${sorted.map((ct, i) => {
+          ${sorted.map((ct) => {
             const segMin  = (ct.minutes_from_start - prevMin).toFixed(1);
             const out     = `<div class="cp-history-row">
               <span class="cp-position">${ct.position}</span>
-              <span class="cp-history-name">${ct.checkpoint_name}</span>
+              <span class="cp-history-name">${String(ct.checkpoint_name||'').replace(/</g,'&lt;')}</span>
               <span class="cp-history-time">${ct.minutes_from_start} min from start</span>
               <span class="cp-history-seg">(+${segMin} min)</span>
             </div>`;
@@ -641,15 +712,25 @@ async function openHistory(routeId, routeName) {
         <td>${l.estimated_mins!=null?l.estimated_mins+' min':'—'}</td>
         <td>${l.actual_mins} min</td>
         <td class="${diffCls}">${diffStr}</td>
-        <td style="color:var(--text-lo)">${l.notes||'—'}</td>
+        <td style="color:var(--text-lo)">${String(l.notes||'—').replace(/</g,'&lt;')}</td>
+        <td class="history-actions">
+          <button type="button" class="btn-sm" onclick="editHistoryLog(${routeId}, ${l.id})">Edit</button>
+          <button type="button" class="btn-sm danger" onclick="deleteHistoryLog(${routeId}, ${l.id})">Del</button>
+        </td>
       </tr>${cpRows}`;
     }).join('');
 
     body.innerHTML=`<table class="history-table">
-      <thead><tr><th>Date</th><th>Estimated</th><th>Actual</th><th>Diff</th><th>Notes</th></tr></thead>
+      <thead><tr><th>Date</th><th>Estimated</th><th>Actual</th><th>Diff</th><th>Notes</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
   } catch { body.innerHTML=`<div class="day-empty">Error loading history.</div>`; }
+}
+
+function editHistoryLog(routeId, logId) {
+  const log = state.historyById[logId];
+  if (!log) return alert('Trip not found — reopen History and try again.');
+  openEditLog(routeId, state.historyRouteName || document.getElementById('history-route-name').textContent, log);
 }
 
 // ─────────────────────────────────────────────
